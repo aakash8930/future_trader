@@ -1,16 +1,9 @@
 import pandas as pd
-
 from models.direction import DirectionModel
 from risk.sizing import fixed_fractional_size
 
 
 class StrategyEngine:
-    """
-    StrategyEngine responsibilities:
-    - Entry signal generation
-    - Conservative but practical thresholds for spot trading
-    """
-
     def __init__(
         self,
         model: DirectionModel,
@@ -24,7 +17,7 @@ class StrategyEngine:
         metrics = getattr(model, "metadata", {}).get("metrics", {})
         self.model_f1 = float(metrics.get("val_f1", 0.0))
 
-        # Base threshold (conservative default)
+        # Conservative base
         if self.model_f1 >= 0.30:
             self.base_long_th = 0.52
         elif self.model_f1 >= 0.20:
@@ -32,7 +25,6 @@ class StrategyEngine:
         else:
             self.base_long_th = 0.56
 
-    # ----------------------------------
     def generate_signal(self, df: pd.DataFrame):
         row = df.iloc[-1]
 
@@ -43,21 +35,22 @@ class StrategyEngine:
 
         prob_up = self.model.predict_proba(df)
 
-        # Broken model protection
+        # Model sanity
         if prob_up < 0.05 or prob_up > 0.95:
             return None, prob_up
 
-        # Volatility floor
         if atr_pct < 0.001:
             return None, prob_up
 
         long_th = self.base_long_th
 
-        # Strong trend bonus (THIS IS THE KEY CHANGE)
-        if adx >= 30:
+        # Strong trend override (KEY CHANGE)
+        if adx >= 35:
+            long_th -= 0.03
+        elif adx >= 30:
             long_th -= 0.02
 
-        # Below EMA200 → be more strict
+        # Below EMA200 = more strict
         if price < ema200:
             long_th += 0.02
 
@@ -76,7 +69,6 @@ class StrategyEngine:
 
         return None, prob_up
 
-    # ----------------------------------
     def position_size(
         self,
         balance: float,
