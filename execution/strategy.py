@@ -16,7 +16,9 @@ class StrategyEngine:
         self.risk_per_trade = risk_per_trade
         self.min_adx = min_adx
 
-        metrics = getattr(model, "metadata", {}).get("metrics", {})
+        # Handle Ensemble model correctly
+        base_model = getattr(model, "models", [model])[0]
+        metrics = getattr(base_model, "metadata", {}).get("metrics", {})
         self.model_f1 = float(metrics.get("val_f1", 0.0))
 
         # Conservative base
