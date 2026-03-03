@@ -14,14 +14,14 @@
   "horizon": 5,
   "atr_multiplier": 0.8,
   "timeframe": "15m",
-  "train_rows": 770,
-  "val_rows": 195,
-  "trained_at_utc": "2026-02-17T09:49:03.620001+00:00",
+  "train_rows": 626,
+  "val_rows": 160,
+  "trained_at_utc": "2026-03-03T01:34:11.557408+00:00",
   "metrics": {
-    "val_accuracy": 0.24102564102564103,
-    "val_precision": 0.24102564102564103,
-    "val_recall": 1.0,
-    "val_f1": 0.3884297520661157,
-    "val_positive_rate": 1.0
+    "val_accuracy": 0.30625,
+    "val_precision": 0.22302158273381295,
+    "val_recall": 0.9117647058823529,
+    "val_f1": 0.3583815028901734,
+    "val_positive_rate": 0.86875
   }
 }

@@ -1,3 +1,5 @@
+#execution/strategy.py
+
 import pandas as pd
 from models.direction import DirectionModel
 from risk.sizing import fixed_fractional_size
@@ -19,11 +21,11 @@ class StrategyEngine:
 
         # Conservative base
         if self.model_f1 >= 0.30:
-            self.base_long_th = 0.52
+            self.base_long_th = 0.51
         elif self.model_f1 >= 0.20:
-            self.base_long_th = 0.54
+            self.base_long_th = 0.53
         else:
-            self.base_long_th = 0.56
+            self.base_long_th = 0.54
 
     def generate_signal(self, df: pd.DataFrame):
         row = df.iloc[-1]

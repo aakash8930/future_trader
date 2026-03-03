@@ -1,5 +1,3 @@
-# execution/runner.py
-
 import time
 from datetime import datetime, timedelta
 
@@ -14,6 +12,7 @@ from execution.market_guard import MarketGuard
 from risk.limits import RiskLimits, RiskState
 from features.technicals import compute_core_features
 from metrics.self_report import DailyAIReport
+from logs.logger import TradeLogger
 
 
 class TradingRunner:
@@ -35,6 +34,7 @@ class TradingRunner:
 
         base_model = DirectionModel.for_symbol(symbol)
         models = [base_model]
+
         if symbol != "BTC/USDT":
             try:
                 models.append(DirectionModel.for_symbol("BTC/USDT"))
@@ -52,18 +52,17 @@ class TradingRunner:
         self.risk_state = RiskState(starting_balance_usdt)
 
         self.broker = ShadowBroker()
+        self.logger = TradeLogger()  # ✅ ADDED
+
         self.report = DailyAIReport()
 
         self.cooldown = timedelta(minutes=cooldown_minutes)
         self.last_trade_time = None
 
-        self.daily = {
-            "trades": 0,
-            "wins": 0,
-            "losses": 0,
-            "net_pnl": 0.0,
-            "peak": starting_balance_usdt,
-        }
+        self.last_entry_price = None
+        self.last_entry_qty = None
+        self.last_entry_prob = None
+        self.last_entry_side = None
 
         print(f"[AUTONOMOUS AI] {symbol} ready")
 
@@ -92,7 +91,7 @@ class TradingRunner:
         if not decision.trade_allowed:
             return
 
-        # -------- EXIT --------
+        # ================= EXIT =================
         if self.broker.position:
             price = float(df.iloc[-1]["close"])
             pnl = self.broker.close_position(price, self.symbol)
@@ -101,24 +100,27 @@ class TradingRunner:
             self.risk_state.register_trade(pnl)
             self.supervisor.register_trade(pnl)
 
-            self.daily["trades"] += 1
-            self.daily["net_pnl"] += pnl
-            self.daily["peak"] = max(
-                self.daily["peak"], self.risk_state.current_balance
+            # ✅ LOG TRADE
+            self.logger.log(
+                symbol=self.symbol,
+                side=self.last_entry_side,
+                entry_price=self.last_entry_price,
+                exit_price=price,
+                qty=self.last_entry_qty,
+                pnl=pnl,
+                balance=self.risk_state.current_balance,
+                prob_up=self.last_entry_prob,
             )
 
-            if pnl > 0:
-                self.daily["wins"] += 1
-            else:
-                self.daily["losses"] += 1
+            print(f"✅ TRADE CLOSED | PnL={pnl:.4f} | Balance={self.risk_state.current_balance:.2f}")
 
             return
 
-        # -------- ENTRY --------
+        # ================= ENTRY =================
         if self.last_trade_time and datetime.utcnow() - self.last_trade_time < self.cooldown:
             return
 
-        signal, _ = self.strategy.generate_signal(df)
+        signal, prob = self.strategy.generate_signal(df)
         if not signal:
             return
 
@@ -135,49 +137,11 @@ class TradingRunner:
             return
 
         self.broker.open_position(signal, price, qty, self.symbol)
+
         self.last_trade_time = datetime.utcnow()
+        self.last_entry_price = price
+        self.last_entry_qty = qty
+        self.last_entry_prob = prob
+        self.last_entry_side = signal
 
-    # --------------------------------------------------
-    def run_loop(self, sleep_seconds: int = 900):
-        print(f"🚀 Autonomous AI Trader running [{self.symbol}]")
-
-        last_day = None
-
-        while True:
-            try:
-                self.run_once()
-
-                today = datetime.utcnow().date()
-                if last_day != today and self.daily["trades"] > 0:
-                    dd = (
-                        (self.daily["peak"] - self.risk_state.current_balance)
-                        / self.daily["peak"]
-                    )
-
-                    self.report.write(
-                        symbol=self.symbol,
-                        trades=self.daily["trades"],
-                        wins=self.daily["wins"],
-                        losses=self.daily["losses"],
-                        net_pnl=self.daily["net_pnl"],
-                        max_dd=dd,
-                        notes="market-guard-active",
-                    )
-
-                    self.daily = {
-                        "trades": 0,
-                        "wins": 0,
-                        "losses": 0,
-                        "net_pnl": 0.0,
-                        "peak": self.risk_state.current_balance,
-                    }
-                    last_day = today
-
-                time.sleep(sleep_seconds)
-
-            except KeyboardInterrupt:
-                print("Stopped by user")
-                break
-            except Exception as e:
-                print("Runner error:", e)
-                time.sleep(30)
+        print(f"📈 OPEN {signal} | price={price:.2f} | qty={qty:.6f}")
