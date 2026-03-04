@@ -1,77 +1,109 @@
-#execution/strategy.py
+# execution/strategy.py
 
 import pandas as pd
+
 from models.direction import DirectionModel
 from risk.sizing import fixed_fractional_size
 
 
 class StrategyEngine:
+    """
+    StrategyEngine responsibilities:
+    - Indicator interpretation
+    - Entry signal generation
+    - Position sizing
+
+    ❌ Does NOT manage exits or trailing stops
+    """
+
     def __init__(
         self,
         model: DirectionModel,
         risk_per_trade: float = 0.01,
-        min_adx: float = 8.0,
+        min_adx: float = 25.0,  # Strong trend filter
     ):
         self.model = model
         self.risk_per_trade = risk_per_trade
         self.min_adx = min_adx
 
-        # Handle Ensemble model correctly
-        base_model = getattr(model, "models", [model])[0]
-        metrics = getattr(base_model, "metadata", {}).get("metrics", {})
-        self.model_f1 = float(metrics.get("val_f1", 0.0))
+        # Logging / analytics
+        self.last_entry_price = None
+        self.last_entry_prob = None
 
-        # Conservative base
-        if self.model_f1 >= 0.30:
-            self.base_long_th = 0.51
-        elif self.model_f1 >= 0.20:
-            self.base_long_th = 0.53
-        else:
-            self.base_long_th = 0.54
+    # ==================================================
+    # SIGNAL GENERATION
+    # ==================================================
 
     def generate_signal(self, df: pd.DataFrame):
-        row = df.iloc[-1]
+        if len(df) < 5:
+            return None, 0.0
 
-        price = row["close"]
-        ema200 = row["ema200"]
-        atr_pct = row["atr_pct"]
-        adx = row["adx"]
+        price = df.iloc[-1]["close"]
+        ema200 = df.iloc[-1]["ema200"]
+        atr = df.iloc[-1]["atr"]
+        adx = df.iloc[-1]["adx"]
 
         prob_up = self.model.predict_proba(df)
 
-        # Model sanity
+        # -----------------------------
+        # OOD protection
+        # -----------------------------
         if prob_up < 0.05 or prob_up > 0.95:
             return None, prob_up
 
-        if atr_pct < 0.001:
+        atr_pct = atr / price
+
+        # -----------------------------
+        # HARD TREND FILTER
+        # -----------------------------
+        if adx < self.min_adx:
+            print(
+                f"DEBUG | SKIP (sideways) "
+                f"adx={adx:.1f}"
+            )
             return None, prob_up
 
-        long_th = self.base_long_th
+        # -----------------------------
+        # Dynamic threshold
+        # -----------------------------
+        long_th = 0.55
 
-        # Strong trend override (KEY CHANGE)
-        if adx >= 35:
-            long_th -= 0.03
-        elif adx >= 30:
+        if adx >= 40:
             long_th -= 0.02
 
-        # Below EMA200 = more strict
-        if price < ema200:
-            long_th += 0.02
+        if price > ema200:
+            long_th -= 0.01
 
-        long_th = max(0.50, min(long_th, 0.60))
+        long_th = max(0.52, min(long_th, 0.60))
 
-        if prob_up >= long_th and adx >= self.min_adx:
+        # -----------------------------
+        # LONG ENTRY
+        # -----------------------------
+        if (
+            prob_up >= long_th
+            and atr_pct > 0.0012
+        ):
+            self.last_entry_price = price
+            self.last_entry_prob = prob_up
+
             return "LONG", prob_up
 
+        # -----------------------------
+        # Debug logging
+        # -----------------------------
         print(
             f"DEBUG | prob={prob_up:.3f} | "
-            f"f1={self.model_f1:.2f} | "
+            f"f1={self.model.f1:.2f} | "
             f"adx={adx:.1f} | "
             f"atr_pct={atr_pct:.4f} | "
             f"long_th={long_th:.3f}"
         )
 
         return None, prob_up
+
+    # ==================================================
+    # POSITION SIZING
+    # ==================================================
 
     def position_size(
         self,
@@ -80,7 +112,8 @@ class StrategyEngine:
         side: str,
         max_position_notional_pct: float = 1.0,
     ) -> float:
-        stop_price = entry_price * 0.99
+
+        stop_price = entry_price * (0.99 if side == "LONG" else 1.01)
 
         return fixed_fractional_size(
             balance=balance,
@@ -89,3 +122,18 @@ class StrategyEngine:
             stop_price=stop_price,
             max_position_notional_pct=max_position_notional_pct,
         )
+
+    # ==================================================
+    # SYMBOL SCORING
+    # ==================================================
+
+    def score_symbol(self, df: pd.DataFrame) -> float:
+        if df.empty:
+            return 0.0
+
+        prob_up = self.model.predict_proba(df)
+
+        atr_pct = df.iloc[-1]["atr"] / df.iloc[-1]["close"]
+        adx = df.iloc[-1]["adx"]
+
+        return float(prob_up * atr_pct * adx)
