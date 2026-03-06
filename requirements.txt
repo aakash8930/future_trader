@@ -4,13 +4,13 @@
 
 python-dateutil
 requests
-ccxt==4.3.78
 ta
 joblib
 pandas
 scikit-learn
-
 numpy==1.26.4
 torch==2.2.2+cpu
-
 psycopg2-binary
+ccxt==4.2.95
+starknet-py==0.21.0
+python-dotenv
