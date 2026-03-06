@@ -4,7 +4,7 @@
 
 python-dateutil
 requests
-ccxt
+ccxt==4.3.78
 ta
 joblib
 pandas
