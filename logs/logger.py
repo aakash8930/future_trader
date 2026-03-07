@@ -1,5 +1,6 @@
 import psycopg2
 import os
+from urllib.parse import urlparse
 from datetime import datetime
 
 
@@ -7,12 +8,16 @@ class TradeLogger:
 
     def __init__(self):
 
+        database_url = os.getenv("DATABASE_URL")
+
+        result = urlparse(database_url)
+
         self.conn = psycopg2.connect(
-            host=os.getenv("DB_HOST"),
-            database=os.getenv("DB_NAME"),
-            user=os.getenv("DB_USER"),
-            password=os.getenv("DB_PASS"),
-            port=os.getenv("DB_PORT", 5432),
+            database=result.path[1:],
+            user=result.username,
+            password=result.password,
+            host=result.hostname,
+            port=result.port
         )
 
         self.conn.autocommit = True
@@ -47,8 +52,8 @@ class TradeLogger:
                 qty,
                 pnl,
                 balance,
-                prob_up,
-            ),
+                prob_up
+            )
         )
 
         cur.close()
