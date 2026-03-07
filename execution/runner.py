@@ -1,3 +1,5 @@
+#execution/runner.py
+
 import time
 from datetime import datetime, timedelta
 
@@ -52,7 +54,7 @@ class TradingRunner:
         self.risk_state = RiskState(starting_balance_usdt)
 
         self.broker = ShadowBroker()
-        self.logger = TradeLogger()  # ✅ ADDED
+        self.logger = TradeLogger()
 
         self.report = DailyAIReport()
 
@@ -64,10 +66,14 @@ class TradingRunner:
         self.last_entry_prob = None
         self.last_entry_side = None
 
+        self.stop_loss = None
+        self.take_profit = None
+
         print(f"[AUTONOMOUS AI] {symbol} ready")
 
     # --------------------------------------------------
     def run_once(self):
+
         df = self.data.fetch_ohlcv(self.symbol, self.timeframe, self.lookback)
         df = compute_core_features(df)
 
@@ -76,7 +82,7 @@ class TradingRunner:
         self.risk_state.reset_if_new_day(today)
         self.supervisor.update_equity(self.risk_state.current_balance)
 
-        # -------- GLOBAL SAFETY --------
+        # ---------------- GLOBAL SAFETY ----------------
         if not self.market_guard.allow_trading(
             balance=self.risk_state.current_balance,
             today=today,
@@ -84,47 +90,99 @@ class TradingRunner:
             return
 
         regime = self.regime_ctrl.detect(df)
+
         if not self.regime_ctrl.trading_allowed(regime):
             return
 
         decision = self.supervisor.decide()
+
         if not decision.trade_allowed:
             return
 
+        price = float(df.iloc[-1]["close"])
+        atr = float(df.iloc[-1]["atr"])
+
         # ================= EXIT =================
         if self.broker.position:
-            price = float(df.iloc[-1]["close"])
-            pnl = self.broker.close_position(price, self.symbol)
 
-            self.market_guard.register_trade(pnl)
-            self.risk_state.register_trade(pnl)
-            self.supervisor.register_trade(pnl)
+            # -------- Trailing Stop --------
+            if price - self.last_entry_price > atr:
 
-            # ✅ LOG TRADE
-            self.logger.log(
-                symbol=self.symbol,
-                side=self.last_entry_side,
-                entry_price=self.last_entry_price,
-                exit_price=price,
-                qty=self.last_entry_qty,
-                pnl=pnl,
-                balance=self.risk_state.current_balance,
-                prob_up=self.last_entry_prob,
-            )
+                new_sl = price - atr
 
-            print(f"✅ TRADE CLOSED | PnL={pnl:.4f} | Balance={self.risk_state.current_balance:.2f}")
+                if new_sl > self.stop_loss:
+                    self.stop_loss = new_sl
+                    print(f"🔁 TRAILING SL UPDATED → {self.stop_loss:.2f}")
+
+            # -------- Stop Loss --------
+            if price <= self.stop_loss:
+
+                pnl = self.broker.close_position(price, self.symbol)
+
+                self.market_guard.register_trade(pnl)
+                self.risk_state.register_trade(pnl)
+                self.supervisor.register_trade(pnl)
+
+                self.logger.log(
+                    symbol=self.symbol,
+                    side=self.last_entry_side,
+                    entry_price=self.last_entry_price,
+                    exit_price=price,
+                    qty=self.last_entry_qty,
+                    pnl=pnl,
+                    balance=self.risk_state.current_balance,
+                    prob_up=self.last_entry_prob,
+                )
+
+                print(f"🛑 STOP LOSS HIT | PnL={pnl:.4f} | Balance={self.risk_state.current_balance:.2f}")
+                return
+
+            # -------- Take Profit --------
+            if price >= self.take_profit:
+
+                pnl = self.broker.close_position(price, self.symbol)
+
+                self.market_guard.register_trade(pnl)
+                self.risk_state.register_trade(pnl)
+                self.supervisor.register_trade(pnl)
+
+                self.logger.log(
+                    symbol=self.symbol,
+                    side=self.last_entry_side,
+                    entry_price=self.last_entry_price,
+                    exit_price=price,
+                    qty=self.last_entry_qty,
+                    pnl=pnl,
+                    balance=self.risk_state.current_balance,
+                    prob_up=self.last_entry_prob,
+                )
+
+                print(f"🎯 TAKE PROFIT HIT | PnL={pnl:.4f} | Balance={self.risk_state.current_balance:.2f}")
+                return
 
             return
 
         # ================= ENTRY =================
+
         if self.last_trade_time and datetime.utcnow() - self.last_trade_time < self.cooldown:
             return
 
         signal, prob = self.strategy.generate_signal(df)
+
         if not signal:
             return
 
-        price = float(df.iloc[-1]["close"])
+        # -------- Probability Filter --------
+        MIN_PROB = 0.50
+        LONG_TH = 0.58
+
+        if prob < MIN_PROB:
+            print(f"DEBUG | SKIP low probability | prob={prob:.3f}")
+            return
+
+        if prob < LONG_TH:
+            return
+
         risk_mult = decision.risk_multiplier * self.regime_ctrl.risk_multiplier(regime)
 
         qty = self.strategy.position_size(
@@ -136,6 +194,13 @@ class TradingRunner:
         if qty <= 0:
             return
 
+        # -------- ATR Risk Model --------
+        stop_distance = atr * 2
+        take_distance = atr * 3
+
+        self.stop_loss = price - stop_distance
+        self.take_profit = price + take_distance
+
         self.broker.open_position(signal, price, qty, self.symbol)
 
         self.last_trade_time = datetime.utcnow()
@@ -144,4 +209,7 @@ class TradingRunner:
         self.last_entry_prob = prob
         self.last_entry_side = signal
 
-        print(f"📈 OPEN {signal} | price={price:.2f} | qty={qty:.6f}")
+        print(
+            f"📈 OPEN {signal} | price={price:.2f} | qty={qty:.6f} | "
+            f"SL={self.stop_loss:.2f} | TP={self.take_profit:.2f} | prob={prob:.3f}"
+        )

@@ -1,31 +1,22 @@
-import os
 import psycopg2
+import os
 from datetime import datetime
 
 
 class TradeLogger:
 
     def __init__(self):
-        self.conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-        self._create_table()
 
-    def _create_table(self):
-        with self.conn.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS trades (
-                    id SERIAL PRIMARY KEY,
-                    time TIMESTAMP,
-                    symbol TEXT,
-                    side TEXT,
-                    entry_price DOUBLE PRECISION,
-                    exit_price DOUBLE PRECISION,
-                    qty DOUBLE PRECISION,
-                    pnl DOUBLE PRECISION,
-                    balance DOUBLE PRECISION,
-                    prob_up DOUBLE PRECISION
-                );
-            """)
-            self.conn.commit()
+        self.conn = psycopg2.connect(
+            host=os.getenv("DB_HOST"),
+            database=os.getenv("DB_NAME"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASS"),
+            port=os.getenv("DB_PORT", 5432),
+        )
+
+        self.conn.autocommit = True
+
 
     def log(
         self,
@@ -36,17 +27,18 @@ class TradeLogger:
         qty,
         pnl,
         balance,
-        prob_up,
+        prob_up
     ):
-        with self.conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO trades (
-                    time, symbol, side,
-                    entry_price, exit_price,
-                    qty, pnl, balance, prob_up
-                )
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s);
-            """, (
+
+        cur = self.conn.cursor()
+
+        cur.execute(
+            """
+            INSERT INTO trades
+            (timestamp, symbol, side, entry_price, exit_price, qty, pnl, balance, prob)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """,
+            (
                 datetime.utcnow(),
                 symbol,
                 side,
@@ -56,5 +48,7 @@ class TradeLogger:
                 pnl,
                 balance,
                 prob_up,
-            ))
-            self.conn.commit()
+            ),
+        )
+
+        cur.close()
