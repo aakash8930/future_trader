@@ -112,7 +112,7 @@ class DirectionModel:
         elif pos_rate < 0.30:
             long_th = 0.50
         else:
-            long_th = 0.55
+            long_th = 0.50
 
         if f1 < 0.20:
             long_th += 0.05

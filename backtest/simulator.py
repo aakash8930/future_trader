@@ -1,12 +1,24 @@
 # backtest/simulator.py
+"""
+Historical simulator — uses IDENTICAL logic to execution/runner.py:
+  - Same StrategyEngine filters and entry thresholds
+  - Same ATR-based stop loss / take profit
+  - Same trail activation and trail distance
+  - Same cooldown
+  - Same pyramiding constraints
+"""
+
+from datetime import datetime, timedelta
 
 import pandas as pd
 import ta
 
 from execution.broker import PaperBroker
+from execution.strategy import StrategyEngine, StrategyConfig
+from execution.regime_controller import RegimeController
 from models.direction import DirectionModel
 from risk.limits import RiskLimits, RiskState
-from risk.sizing import fixed_fractional_size
+from features.technicals import compute_core_features
 
 
 class HistoricalSimulator:
@@ -16,121 +28,187 @@ class HistoricalSimulator:
         scaler_path: str,
         starting_balance: float = 500.0,
         lookback: int = 300,
+        config: StrategyConfig | None = None,
+        risk_per_trade: float = 0.01,
     ):
         self.model = DirectionModel(model_path, scaler_path)
+        self.cfg   = config or StrategyConfig()
 
-        self.risk_limits = RiskLimits(
-            max_daily_loss_pct=1.0,
-            max_weekly_loss_pct=1.0,
-            max_trades_per_day=100_000,
-        )
+        self.strategy     = StrategyEngine(self.model, risk_per_trade, self.cfg)
+        self.regime_ctrl  = RegimeController()
 
-        self.risk_state = RiskState(starting_balance)
-        self.broker = PaperBroker()
+        self.risk_limits  = RiskLimits(max_daily_loss_pct=1.0, max_consecutive_losses=1_000_000)
+        self.risk_state   = RiskState(starting_balance)
+        self.broker       = PaperBroker()
 
-        self.lookback = lookback
-        self.risk_per_trade = 0.01
+        self.lookback      = lookback
+        self.risk_per_trade = risk_per_trade
 
         self.trades: list[dict] = []
 
-        self.last_entry_price: float | None = None
-        self.last_entry_prob: float | None = None
+        # Position state (mirrors runner.py)
+        self.last_entry_time:  datetime | None = None
+        self.last_entry_price: float   | None = None
+        self.last_entry_qty:   float   | None = None
+        self.last_entry_prob:  float   | None = None
+        self.last_entry_side:  str     | None = None
+        self.last_pyramid_price: float | None = None
+        self.last_decision = None
 
-        self.trailing_pct = 0.0075
-        self.trailing_stop: float | None = None
-        self.highest_price: float | None = None
-        self.lowest_price: float | None = None
+        self.stop_loss:    float | None = None
+        self.take_profit:  float | None = None
+        self._trail_activated: bool = False
 
+        # Candle-close deduplication: skip if this candle timestamp was already processed.
+        self.last_processed_candle_time: pd.Timestamp | None = None
+
+    # ------------------------------------------------------------------
     def step(self, df: pd.DataFrame) -> None:
-        current_date = pd.to_datetime(df.iloc[-1]["time"], unit="ms").date()
-        self.risk_state.reset_if_new_day(current_date)
+        # The caller passes a rolling window; iloc[-1] is the candle under evaluation.
+        # In a properly stepped backtest loop each window ends on a closed candle, but
+        # guard against accidental duplicate calls with the same window.
+        if len(df) < 2:
+            return
 
-        price = df.iloc[-1]["close"]
-        prob_up = self.model.predict_proba(df)
-
-        df = df.copy()
-        df["ema200"] = ta.trend.EMAIndicator(df["close"], 200).ema_indicator()
-        df["atr"] = ta.volatility.AverageTrueRange(
-            df["high"], df["low"], df["close"], 14
-        ).average_true_range()
-
-        ema200 = df.iloc[-1]["ema200"]
-        atr_pct = df.iloc[-1]["atr"] / price
-
-        # ================= EXIT =================
-        if self.broker.position:
-            side = self.broker.position.side
-
-            if side == "LONG":
-                self.highest_price = max(self.highest_price, price)
-                self.trailing_stop = max(
-                    self.trailing_stop,
-                    self.highest_price * (1 - self.trailing_pct),
-                )
-                hit_stop = price <= self.trailing_stop
-            else:
-                self.lowest_price = min(self.lowest_price, price)
-                self.trailing_stop = min(
-                    self.trailing_stop,
-                    self.lowest_price * (1 + self.trailing_pct),
-                )
-                hit_stop = price >= self.trailing_stop
-
-            if hit_stop:
-                exit_price = price * 0.9995
-                pnl = self.broker.close_position(exit_price)
-                self.risk_state.register_trade(pnl)
-
-                self.trades.append({
-                    "side": side,
-                    "entry_price": self.last_entry_price,
-                    "exit_price": exit_price,
-                    "pnl": pnl,
-                    "balance": self.risk_state.current_balance,
-                    "prob_up_entry": self.last_entry_prob,
-                })
-
-                self.trailing_stop = None
-                self.highest_price = None
-                self.lowest_price = None
+        raw_ts = df.iloc[-1]["time"] if "time" in df.columns else None
+        if raw_ts is not None:
+            candle_ts = pd.Timestamp(raw_ts, unit="ms")
+            if candle_ts == self.last_processed_candle_time:
                 return
+            self.last_processed_candle_time = candle_ts
+
+        df = compute_core_features(df)
+
+        if df.empty:
+            return
+
+        ts    = pd.to_datetime(df.iloc[-1]["time"], unit="ms") if "time" in df.columns else datetime.utcnow()
+        today = ts.date()
+        self.risk_state.reset_if_new_day(today)
+
+        price = float(df.iloc[-1]["close"])
+        atr   = float(df.iloc[-1]["atr"])
+
+        regime = self.regime_ctrl.detect(df)
+
+        # ================= MANAGE OPEN POSITION =================
+        if self.broker.position:
+            pos = self.broker.position
+
+            # Trailing stop (same logic as runner)
+            unrealised_move = price - self.last_entry_price
+            if unrealised_move >= self.cfg.trail_activate_atr_mult * atr:
+                if not self._trail_activated:
+                    self._trail_activated = True
+                    self.stop_loss = max(self.stop_loss, self.last_entry_price * 1.0005)
+
+                new_sl = price - self.cfg.trail_atr_mult * atr
+                if new_sl > self.stop_loss:
+                    self.stop_loss = new_sl
+
+            # Pyramiding (same guard as runner: only after breakeven locked)
+            ref_price = self.last_pyramid_price or self.last_entry_price
+            move_pct  = (price - ref_price) / ref_price
+
+            if (
+                self._trail_activated
+                and move_pct >= self.cfg.pyramid_trigger_pct
+                and pos.add_count < self.cfg.max_pyramid_adds
+            ):
+                scale   = self.cfg.pyramid_qty_scales[pos.add_count]
+                add_qty = self.last_entry_qty * scale
+                max_notional = self.last_entry_price * self.last_entry_qty * 2.0
+                if pos.avg_entry * (pos.qty + add_qty) <= max_notional:
+                    self.broker.position.add_to_position(price, add_qty)
+                    self.last_pyramid_price = price
+
+            # Stop loss
+            if price <= self.stop_loss:
+                self._close(price, ts, "stop_loss")
+                return
+
+            # Take profit
+            if price >= self.take_profit:
+                self._close(price, ts, "take_profit")
+                return
+
+            return
 
         # ================= ENTRY =================
-        if self.broker.position is None:
-            if not self.risk_state.trading_allowed(self.risk_limits):
+        if self.last_entry_time:
+            cooldown = timedelta(minutes=self.cfg.cooldown_minutes)
+            if (ts - self.last_entry_time) < cooldown:
                 return
 
-            side = None
-            if prob_up >= 0.40 and price > ema200 and atr_pct > 0.0015:
-                side = "LONG"
-            elif prob_up <= 0.25 and price < ema200 and atr_pct > 0.0015:
-                side = "SHORT"
+        if not self.risk_state.trading_allowed(self.risk_limits):
+            return
 
-            if not side:
-                return
+        dec = self.strategy.generate_signal(df, regime=str(regime))
 
-            stop_price = price * (0.99 if side == "LONG" else 1.01)
-            qty = fixed_fractional_size(
-                balance=self.risk_state.current_balance,
-                risk_pct=self.risk_per_trade,
-                entry_price=price,
-                stop_price=stop_price,
-            )
+        if not dec.side:
+            return
 
-            if qty <= 0:
-                return
+        qty = self.strategy.position_size(
+            balance=self.risk_state.current_balance,
+            entry_price=dec.price,
+            stop_price=dec.stop_loss,
+        )
 
-            self.broker.open_position(side, price, qty)
-            self.last_entry_price = price
-            self.last_entry_prob = prob_up
+        if qty <= 0:
+            return
 
-            if side == "LONG":
-                self.highest_price = price
-            else:
-                self.lowest_price = price
+        self.broker.open_position(dec.side, dec.price, qty)
 
-            self.trailing_stop = stop_price
+        self.last_entry_time   = ts
+        self.last_entry_price  = dec.price
+        self.last_entry_qty    = qty
+        self.last_entry_prob   = dec.prob
+        self.last_entry_side   = dec.side
+        self.last_pyramid_price = None
+        self.last_decision     = dec
+        self.stop_loss         = dec.stop_loss
+        self.take_profit       = dec.take_profit
+        self._trail_activated  = False
 
+    # ------------------------------------------------------------------
+    def _close(self, price: float, ts: datetime, exit_reason: str):
+        pos       = self.broker.position
+        add_count = pos.add_count
+        avg_entry = pos.avg_entry
+        total_qty = pos.qty
+        dec       = self.last_decision
+
+        pnl = self.broker.close_position(price)
+        self.risk_state.register_trade(pnl)
+
+        self.trades.append({
+            "entry_time":  self.last_entry_time,
+            "exit_time":   ts,
+            "symbol":      "",
+            "side":        self.last_entry_side,
+            "entry_price": self.last_entry_price,
+            "avg_entry":   avg_entry,
+            "exit_price":  price,
+            "qty":         total_qty,
+            "pnl":         pnl,
+            "balance":     self.risk_state.current_balance,
+            "prob":        self.last_entry_prob,
+            "threshold":   dec.threshold if dec else 0.0,
+            "atr":         dec.atr if dec else 0.0,
+            "atr_pct":     dec.atr_pct if dec else 0.0,
+            "adx":         dec.adx if dec else 0.0,
+            "regime":      dec.regime if dec else "",
+            "stop_loss":   self.stop_loss,
+            "take_profit": self.take_profit,
+            "exit_reason": exit_reason,
+            "add_count":   add_count,
+        })
+
+        self.last_pyramid_price = None
+        self._trail_activated   = False
+
+    # ------------------------------------------------------------------
     def export(self, path: str) -> None:
         pd.DataFrame(self.trades).to_csv(path, index=False)
+
 

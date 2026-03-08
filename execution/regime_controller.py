@@ -5,36 +5,44 @@ import pandas as pd
 
 
 class MarketRegime(str, Enum):
-    TRENDING = "trending"
-    RANGING = "ranging"
-    CHOPPY = "choppy"
+
+    TREND_STRONG = "trend_strong"
+    TREND_WEAK = "trend_weak"
+    SIDEWAYS = "sideways"
 
 
 class RegimeController:
     """
-    Detects market regime and provides strategy modifiers.
+    Detect market regime and adjust risk/trading rules.
     """
 
     def detect(self, df: pd.DataFrame) -> MarketRegime:
-        adx = df.iloc[-1]["adx"]
-        atr_pct = df.iloc[-1]["atr_pct"]
 
-        if adx >= 25 and atr_pct >= 0.002:
-            return MarketRegime.TRENDING
+        adx = float(df.iloc[-1]["adx"])
+        atr_pct = float(df.iloc[-1]["atr_pct"])
 
-        if adx < 15:
-            return MarketRegime.RANGING
+        if adx >= 30 and atr_pct >= 0.003:
+            return MarketRegime.TREND_STRONG
 
-        return MarketRegime.CHOPPY
+        if adx >= 15:
+            return MarketRegime.TREND_WEAK
+
+        return MarketRegime.SIDEWAYS
 
     def risk_multiplier(self, regime: MarketRegime) -> float:
-        if regime == MarketRegime.TRENDING:
-            return 1.25
-        if regime == MarketRegime.RANGING:
-            return 0.75
-        return 0.50
+
+        if regime == MarketRegime.TREND_STRONG:
+            return 1.2
+
+        if regime == MarketRegime.TREND_WEAK:
+            return 1.0
+
+        return 0.6
 
     def trading_allowed(self, regime: MarketRegime) -> bool:
-        if regime == MarketRegime.CHOPPY:
+
+        if regime == MarketRegime.SIDEWAYS:
+            print("DEBUG | SKIP sideways")
             return False
+
         return True

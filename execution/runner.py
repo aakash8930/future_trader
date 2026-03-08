@@ -1,12 +1,13 @@
-#execution/runner.py
+# execution/runner.py
 
 import time
+import pandas as pd
 from datetime import datetime, timedelta
 
 from data.fetcher import MarketDataFetcher
 from models.direction import DirectionModel
 from models.ensemble import EnsembleDirectionModel
-from execution.strategy import StrategyEngine
+from execution.strategy import StrategyEngine, StrategyConfig
 from execution.shadow_broker import ShadowBroker
 from execution.regime_controller import RegimeController
 from execution.ai_supervisor import AISupervisor
@@ -15,6 +16,15 @@ from risk.limits import RiskLimits, RiskState
 from features.technicals import compute_core_features
 from metrics.self_report import DailyAIReport
 from logs.logger import TradeLogger
+
+
+def _fmt_price(price: float, symbol: str) -> str:
+    """Symbol-aware price formatting (low-price assets need more decimals)."""
+    if price < 0.01:
+        return f"{price:.6f}"
+    if price < 1.0:
+        return f"{price:.4f}"
+    return f"{price:.2f}"
 
 
 class TradingRunner:
@@ -27,6 +37,7 @@ class TradingRunner:
         starting_balance_usdt: float = 500.0,
         cooldown_minutes: int = 30,
         risk_per_trade: float = 0.01,
+        config: StrategyConfig | None = None,
     ):
         self.symbol = symbol
         self.timeframe = timeframe
@@ -44,7 +55,9 @@ class TradingRunner:
                 pass
 
         self.model = EnsembleDirectionModel(models)
-        self.strategy = StrategyEngine(self.model, risk_per_trade)
+
+        self.cfg = config or StrategyConfig(cooldown_minutes=cooldown_minutes)
+        self.strategy = StrategyEngine(self.model, risk_per_trade, self.cfg)
 
         self.supervisor = AISupervisor()
         self.regime_ctrl = RegimeController()
@@ -59,15 +72,23 @@ class TradingRunner:
         self.report = DailyAIReport()
 
         self.cooldown = timedelta(minutes=cooldown_minutes)
-        self.last_trade_time = None
+        self.last_trade_time: datetime | None = None
 
-        self.last_entry_price = None
-        self.last_entry_qty = None
-        self.last_entry_prob = None
-        self.last_entry_side = None
+        # Position state
+        self.last_entry_price: float | None = None
+        self.last_entry_qty: float | None = None      # initial qty (base for pyramid scale)
+        self.last_entry_prob: float | None = None
+        self.last_entry_side: str | None = None
+        self.last_pyramid_price: float | None = None  # price at last pyramid add
+        self.last_decision = None                      # SignalDecision snapshot at entry
 
-        self.stop_loss = None
-        self.take_profit = None
+        # Stops
+        self.stop_loss: float | None = None
+        self.take_profit: float | None = None
+        self._trail_activated: bool = False
+
+        # Candle-close deduplication: only act once per fully closed candle.
+        self.last_processed_candle_time: datetime | None = None
 
         print(f"[AUTONOMOUS AI] {symbol} ready")
 
@@ -75,10 +96,22 @@ class TradingRunner:
     def run_once(self):
 
         df = self.data.fetch_ohlcv(self.symbol, self.timeframe, self.lookback)
+
+        # ---- Candle-close guard ----
+        # iloc[-1] is the still-forming (live) candle — use iloc[-2] as the last
+        # fully closed candle so signals are never based on incomplete data.
+        if len(df) < 3:
+            return
+        closed_candle_time = pd.Timestamp(df.iloc[-2]["time"], unit="ms", tz="UTC")
+        if closed_candle_time == self.last_processed_candle_time:
+            return   # already processed this candle, nothing new to evaluate
+        self.last_processed_candle_time = closed_candle_time
+
+        # Use only confirmed closed candles (drop the live/forming last row).
+        df = df.iloc[:-1].copy()
         df = compute_core_features(df)
 
         today = datetime.utcnow().date()
-
         self.risk_state.reset_if_new_day(today)
         self.supervisor.update_equity(self.risk_state.current_balance)
 
@@ -94,122 +127,169 @@ class TradingRunner:
         if not self.regime_ctrl.trading_allowed(regime):
             return
 
-        decision = self.supervisor.decide()
-
-        if not decision.trade_allowed:
+        supervisor_dec = self.supervisor.decide()
+        if not supervisor_dec.trade_allowed:
             return
 
         price = float(df.iloc[-1]["close"])
-        atr = float(df.iloc[-1]["atr"])
+        atr   = float(df.iloc[-1]["atr"])
 
-        # ================= EXIT =================
+        # ================= MANAGE OPEN POSITION =================
         if self.broker.position:
+            pos = self.broker.position
+            fp  = _fmt_price(price, self.symbol)
 
-            # -------- Trailing Stop --------
-            if price - self.last_entry_price > atr:
+            # ---- Trailing Stop (ATR-based, activates after 1 ATR of profit) ----
+            unrealised_move = price - self.last_entry_price
+            if unrealised_move >= self.cfg.trail_activate_atr_mult * atr:
+                if not self._trail_activated:
+                    # First activation: move stop to breakeven + small fee buffer
+                    self._trail_activated = True
+                    self.stop_loss = max(self.stop_loss, self.last_entry_price * 1.0005)
+                    print(f"🔒 TRAIL ACTIVATED → SL moved to breakeven ({_fmt_price(self.stop_loss, self.symbol)})")
 
-                new_sl = price - atr
-
+                new_sl = price - self.cfg.trail_atr_mult * atr
                 if new_sl > self.stop_loss:
                     self.stop_loss = new_sl
-                    print(f"🔁 TRAILING SL UPDATED → {self.stop_loss:.2f}")
+                    print(f"🔁 TRAILING SL → {_fmt_price(self.stop_loss, self.symbol)}")
 
-            # -------- Stop Loss --------
+            # ---- Pyramiding ----
+            ref_price = self.last_pyramid_price or self.last_entry_price
+            move_pct  = (price - ref_price) / ref_price
+
+            if (
+                self._trail_activated                           # only add when protected
+                and move_pct >= self.cfg.pyramid_trigger_pct
+                and pos.add_count < self.cfg.max_pyramid_adds
+            ):
+                scale   = self.cfg.pyramid_qty_scales[pos.add_count]
+                add_qty = self.last_entry_qty * scale
+
+                # Notional safety cap
+                max_notional = self.last_entry_price * self.last_entry_qty * 2.0
+                if pos.avg_entry * (pos.qty + add_qty) <= max_notional:
+                    self.broker.add_to_position(price, add_qty)
+                    self.last_pyramid_price = price
+                    print(
+                        f"➕ PYRAMID ADD #{pos.add_count} | price={fp} "
+                        f"qty={add_qty:.6f} avg_entry={_fmt_price(pos.avg_entry, self.symbol)} "
+                        f"total_qty={pos.qty:.6f}"
+                    )
+
+            # ---- Stop Loss ----
             if price <= self.stop_loss:
-
-                pnl = self.broker.close_position(price, self.symbol)
-
-                self.market_guard.register_trade(pnl)
-                self.risk_state.register_trade(pnl)
-                self.supervisor.register_trade(pnl)
-
-                self.logger.log(
-                    symbol=self.symbol,
-                    side=self.last_entry_side,
-                    entry_price=self.last_entry_price,
-                    exit_price=price,
-                    qty=self.last_entry_qty,
-                    pnl=pnl,
-                    balance=self.risk_state.current_balance,
-                    prob_up=self.last_entry_prob,
-                )
-
-                print(f"🛑 STOP LOSS HIT | PnL={pnl:.4f} | Balance={self.risk_state.current_balance:.2f}")
+                self._close_position(price, "stop_loss")
                 return
 
-            # -------- Take Profit --------
+            # ---- Take Profit ----
             if price >= self.take_profit:
-
-                pnl = self.broker.close_position(price, self.symbol)
-
-                self.market_guard.register_trade(pnl)
-                self.risk_state.register_trade(pnl)
-                self.supervisor.register_trade(pnl)
-
-                self.logger.log(
-                    symbol=self.symbol,
-                    side=self.last_entry_side,
-                    entry_price=self.last_entry_price,
-                    exit_price=price,
-                    qty=self.last_entry_qty,
-                    pnl=pnl,
-                    balance=self.risk_state.current_balance,
-                    prob_up=self.last_entry_prob,
-                )
-
-                print(f"🎯 TAKE PROFIT HIT | PnL={pnl:.4f} | Balance={self.risk_state.current_balance:.2f}")
+                self._close_position(price, "take_profit")
                 return
 
             return
 
         # ================= ENTRY =================
-
         if self.last_trade_time and datetime.utcnow() - self.last_trade_time < self.cooldown:
             return
 
-        signal, prob = self.strategy.generate_signal(df)
+        # All filtering logic is inside generate_signal — runner trusts it fully.
+        dec = self.strategy.generate_signal(df, regime=str(regime))
 
-        if not signal:
+        if not dec.side:
+            print(f"[{self.symbol}] SKIP | {dec.reason}")
             return
 
-        # -------- Probability Filter --------
-        MIN_PROB = 0.50
-        LONG_TH = 0.58
-
-        if prob < MIN_PROB:
-            print(f"DEBUG | SKIP low probability | prob={prob:.3f}")
-            return
-
-        if prob < LONG_TH:
-            return
-
-        risk_mult = decision.risk_multiplier * self.regime_ctrl.risk_multiplier(regime)
+        risk_mult = supervisor_dec.risk_multiplier * self.regime_ctrl.risk_multiplier(regime)
 
         qty = self.strategy.position_size(
             balance=self.risk_state.current_balance * risk_mult,
-            entry_price=price,
-            side=signal,
+            entry_price=dec.price,
+            stop_price=dec.stop_loss,          # ATR-based stop, not hardcoded 1%
         )
 
         if qty <= 0:
             return
 
-        # -------- ATR Risk Model --------
-        stop_distance = atr * 2
-        take_distance = atr * 3
+        self.broker.open_position(dec.side, dec.price, qty, self.symbol)
 
-        self.stop_loss = price - stop_distance
-        self.take_profit = price + take_distance
+        self.last_trade_time   = datetime.utcnow()
+        self.last_entry_price  = dec.price
+        self.last_entry_qty    = qty
+        self.last_entry_prob   = dec.prob
+        self.last_entry_side   = dec.side
+        self.last_pyramid_price = None
+        self.last_decision     = dec
+        self.stop_loss         = dec.stop_loss
+        self.take_profit       = dec.take_profit
+        self._trail_activated  = False
 
-        self.broker.open_position(signal, price, qty, self.symbol)
-
-        self.last_trade_time = datetime.utcnow()
-        self.last_entry_price = price
-        self.last_entry_qty = qty
-        self.last_entry_prob = prob
-        self.last_entry_side = signal
-
+        fp = _fmt_price(dec.price, self.symbol)
         print(
-            f"📈 OPEN {signal} | price={price:.2f} | qty={qty:.6f} | "
-            f"SL={self.stop_loss:.2f} | TP={self.take_profit:.2f} | prob={prob:.3f}"
+            f"📈 OPEN {dec.side} {self.symbol} | price={fp} | qty={qty:.6f} | "
+            f"SL={_fmt_price(dec.stop_loss, self.symbol)} | "
+            f"TP={_fmt_price(dec.take_profit, self.symbol)} | "
+            f"prob={dec.prob:.3f} | adx={dec.adx:.1f} | regime={dec.regime}"
         )
+
+    # --------------------------------------------------
+    def _close_position(self, price: float, exit_reason: str):
+        """Shared close logic for SL and TP exits."""
+        pos       = self.broker.position
+        add_count = pos.add_count
+        avg_entry = pos.avg_entry
+        total_qty = pos.qty
+        dec       = self.last_decision
+
+        pnl = self.broker.close_position(price, self.symbol)
+
+        self.market_guard.register_trade(pnl)
+        self.risk_state.register_trade(pnl)
+        self.supervisor.register_trade(pnl)
+
+        try:
+            self.logger.log(
+                symbol=self.symbol,
+                side=self.last_entry_side,
+                entry_price=self.last_entry_price,
+                avg_entry=avg_entry,
+                exit_price=price,
+                qty=total_qty,
+                pnl=pnl,
+                balance=self.risk_state.current_balance,
+                prob_up=self.last_entry_prob,
+                threshold=dec.threshold if dec else 0.0,
+                atr=dec.atr if dec else 0.0,
+                atr_pct=dec.atr_pct if dec else 0.0,
+                adx=dec.adx if dec else 0.0,
+                regime=dec.regime if dec else "",
+                stop_loss=self.stop_loss,
+                take_profit=self.take_profit,
+                exit_reason=exit_reason,
+                add_count=add_count,
+            )
+        except Exception as exc:
+            print(f"[LOGGER ERROR] {exc}")
+
+        self.last_pyramid_price = None
+        self._trail_activated   = False
+
+        icon = "🛑" if exit_reason == "stop_loss" else "🎯"
+        print(
+            f"{icon} {exit_reason.upper().replace('_', ' ')} | "
+            f"pnl={pnl:.4f} | balance={self.risk_state.current_balance:.2f} | "
+            f"avg_entry={_fmt_price(avg_entry, self.symbol)} | adds={add_count}"
+        )
+
+    # --------------------------------------------------
+    def run_loop(self, sleep_seconds: int = 60):
+        """Single-symbol continuous loop — mirrors multi_runner behaviour."""
+        print(f"🚀 {self.symbol} loop started (sleep={sleep_seconds}s)")
+        while True:
+            try:
+                self.run_once()
+            except KeyboardInterrupt:
+                print("Stopped by user")
+                break
+            except Exception as exc:
+                print(f"[{self.symbol}] run error: {exc}")
+            time.sleep(sleep_seconds)

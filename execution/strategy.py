@@ -1,10 +1,70 @@
 # execution/strategy.py
 
+from dataclasses import dataclass, field
+from typing import Optional, List
 import pandas as pd
 
 from models.direction import DirectionModel
 from risk.sizing import fixed_fractional_size
 
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+@dataclass
+class StrategyConfig:
+    """Single source of truth for all strategy parameters."""
+    # Signal filters
+    min_prob:              float = 0.58
+    min_adx:               float = 15.0
+    min_atr_pct:           float = 0.001
+
+    # Threshold adjustment (model base threshold is used as starting point)
+    base_long_threshold:   float = 0.58   # overridden by model.long_threshold at runtime
+
+    # ATR-based stop / take-profit
+    stop_atr_mult:         float = 2.0
+    take_atr_mult:         float = 3.0
+
+    # Trailing stop
+    trail_activate_atr_mult: float = 1.0   # activate trail when move >= 1 ATR
+    trail_atr_mult:          float = 1.0   # trail by 1 ATR below peak
+
+    # Cooldown
+    cooldown_minutes:      int   = 30
+
+    # Pyramiding (max_pyramid_adds=0 means disabled)
+    max_pyramid_adds:      int   = 1
+    pyramid_trigger_pct:   float = 0.005
+    pyramid_qty_scales:    List[float] = field(default_factory=lambda: [0.6, 0.4, 0.25])
+
+
+# ---------------------------------------------------------------------------
+# Signal Decision
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SignalDecision:
+    """Full signal output returned by StrategyEngine.generate_signal()."""
+    side:       Optional[str]  # "LONG" or None
+    prob:       float
+    threshold:  float
+    reason:     str            # human-readable skip reason when side=None
+    adx:        float
+    atr:        float
+    atr_pct:    float
+    regime:     str
+    ema_fast:   float
+    ema_slow:   float
+    price:      float
+    stop_loss:  float
+    take_profit: float
+
+
+# ---------------------------------------------------------------------------
+# Engine
+# ---------------------------------------------------------------------------
 
 class StrategyEngine:
 
@@ -12,93 +72,95 @@ class StrategyEngine:
         self,
         model: DirectionModel,
         risk_per_trade: float = 0.01,
-        min_adx: float = 25.0,
+        config: Optional[StrategyConfig] = None,
     ):
         self.model = model
         self.risk_per_trade = risk_per_trade
-        self.min_adx = min_adx
+        self.cfg = config or StrategyConfig()
 
-        self.last_entry_price = None
-        self.last_entry_prob = None
-
-    # ==========================================
-    # SIGNAL GENERATION
-    # ==========================================
-
-    def generate_signal(self, df: pd.DataFrame):
+    # ------------------------------------------------------------------
+    def generate_signal(self, df: pd.DataFrame, regime: str = "") -> SignalDecision:
+        """
+        Evaluate entry conditions and return a SignalDecision.
+        All threshold logic lives here — runner must NOT apply a second filter.
+        """
+        _null = SignalDecision(
+            side=None, prob=0.0, threshold=0.0, reason="",
+            adx=0.0, atr=0.0, atr_pct=0.0, regime=regime,
+            ema_fast=0.0, ema_slow=0.0, price=0.0,
+            stop_loss=0.0, take_profit=0.0,
+        )
 
         if len(df) < 5:
-            return None, 0.0
+            _null.reason = "insufficient_data"
+            return _null
 
-        price = df.iloc[-1]["close"]
-        ema200 = df.iloc[-1]["ema200"]
-        atr = df.iloc[-1]["atr"]
-        adx = df.iloc[-1]["adx"]
+        row      = df.iloc[-1]
+        price    = float(row["close"])
+        ema200   = float(row["ema200"])
+        ema_fast = float(row["ema_fast"])
+        ema_slow = float(row["ema_slow"])
+        atr      = float(row["atr"])
+        adx      = float(row["adx"])
+        atr_pct  = float(row["atr_pct"])
 
         prob_up = self.model.predict_proba(df)
 
-        atr_pct = atr / price
+        # Use model's optimised threshold as the base; fall back to config.
+        long_th = getattr(self.model, "long_threshold", self.cfg.min_prob)
 
-        # ----------------------------------
-        # TREND FILTER
-        # ----------------------------------
-
-        if adx < self.min_adx:
-            print(f"DEBUG | SKIP sideways | adx={adx:.1f}")
-            return None, prob_up
-
-        # ----------------------------------
-        # Dynamic threshold
-        # ----------------------------------
-
-        long_th = 0.55
-
-        if adx >= 40:
+        # Slight regime adjustments (keep modest — avoid over-fitting).
+        if adx >= 35:
             long_th -= 0.02
+        long_th = max(self.cfg.min_prob, min(long_th, 0.65))
 
-        if price > ema200:
-            long_th -= 0.01
+        stop_loss  = price - atr * self.cfg.stop_atr_mult
+        take_profit = price + atr * self.cfg.take_atr_mult
 
-        long_th = max(0.52, min(long_th, 0.60))
-
-        # ----------------------------------
-        # LONG ENTRY
-        # ----------------------------------
-
-        if prob_up >= long_th and atr_pct > 0.0012:
-
-            self.last_entry_price = price
-            self.last_entry_prob = prob_up
-
-            return "LONG", prob_up
-
-        # ----------------------------------
-        # DEBUG LOG
-        # ----------------------------------
-
-        print(
-            f"DEBUG | prob={prob_up:.3f} | "
-            f"adx={adx:.1f} | "
-            f"atr_pct={atr_pct:.4f} | "
-            f"long_th={long_th:.3f}"
+        base = SignalDecision(
+            side=None, prob=prob_up, threshold=long_th, reason="",
+            adx=adx, atr=atr, atr_pct=atr_pct, regime=regime,
+            ema_fast=ema_fast, ema_slow=ema_slow, price=price,
+            stop_loss=stop_loss, take_profit=take_profit,
         )
 
-        return None, prob_up
+        # ---- Filters (order: fastest to cheapest to eliminate) ----
+        if adx < self.cfg.min_adx:
+            base.reason = f"adx_low({adx:.1f}<{self.cfg.min_adx})"
+            return base
 
-    # ==========================================
-    # POSITION SIZING
-    # ==========================================
+        if atr_pct < self.cfg.min_atr_pct:
+            base.reason = f"atr_pct_low({atr_pct:.4f}<{self.cfg.min_atr_pct})"
+            return base
 
+        if price <= ema200:
+            base.reason = f"price_below_ema200({price:.4f}<={ema200:.4f})"
+            return base
+
+        if ema_fast <= ema_slow:
+            base.reason = f"ema_cross_bearish(fast={ema_fast:.4f}<=slow={ema_slow:.4f})"
+            return base
+
+        if prob_up < long_th:
+            base.reason = f"prob_low({prob_up:.3f}<{long_th:.3f})"
+            return base
+
+        base.side = "LONG"
+        base.reason = "ok"
+        return base
+
+    # ------------------------------------------------------------------
     def position_size(
         self,
         balance: float,
         entry_price: float,
-        side: str,
+        stop_price: float,
         max_position_notional_pct: float = 1.0,
-    ):
-
-        stop_price = entry_price * (0.99 if side == "LONG" else 1.01)
-
+    ) -> float:
+        """
+        Fixed-fractional sizing using the actual ATR-based stop distance.
+        stop_price must come from the SignalDecision, not a hardcoded 1%.
+        """
         return fixed_fractional_size(
             balance=balance,
             risk_pct=self.risk_per_trade,
@@ -107,18 +169,11 @@ class StrategyEngine:
             max_position_notional_pct=max_position_notional_pct,
         )
 
-    # ==========================================
-    # SYMBOL SCORING
-    # ==========================================
-
-    def score_symbol(self, df: pd.DataFrame):
-
+    # ------------------------------------------------------------------
+    def score_symbol(self, df: pd.DataFrame) -> float:
         if df.empty:
             return 0.0
-
-        prob_up = self.model.predict_proba(df)
-
-        atr_pct = df.iloc[-1]["atr"] / df.iloc[-1]["close"]
-        adx = df.iloc[-1]["adx"]
-
+        prob_up  = self.model.predict_proba(df)
+        atr_pct  = df.iloc[-1]["atr_pct"]
+        adx      = df.iloc[-1]["adx"]
         return float(prob_up * atr_pct * adx)
