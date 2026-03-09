@@ -40,7 +40,7 @@ class CoinSelector:
         lookback: int = 200,
         top_k: int = 4,
         min_atr_pct: float = 0.001,
-        min_volume_ratio: float = 0.9,
+        min_volume_ratio: float = 0.7,
     ):
         self.timeframe = timeframe
         self.lookback = lookback

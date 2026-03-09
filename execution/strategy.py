@@ -133,11 +133,25 @@ class StrategyEngine:
             base.reason = f"atr_pct_low({atr_pct:.4f}<{self.cfg.min_atr_pct})"
             return base
 
-        if price <= ema200:
+        # --- Trend condition: two valid paths for a long entry ---
+        # Path 1 (classic):   price is above the 200-period EMA
+        # Path 2 (override):  strong short-term momentum even if price is still
+        #                     slightly below ema200 — requires faster EMA cross,
+        #                     meaningful trend strength, and higher model confidence.
+        above_ema200 = price > ema200
+        momentum_override = (
+            ema_fast > ema_slow
+            and adx >= 25
+            and prob_up >= long_th + 0.02
+        )
+
+        if not above_ema200 and not momentum_override:
             base.reason = f"price_below_ema200({price:.4f}<={ema200:.4f})"
             return base
 
-        if ema_fast <= ema_slow:
+        # EMA cross is still required on the classic path;
+        # momentum_override already enforces ema_fast > ema_slow.
+        if above_ema200 and ema_fast <= ema_slow:
             base.reason = f"ema_cross_bearish(fast={ema_fast:.4f}<=slow={ema_slow:.4f})"
             return base
 
@@ -145,8 +159,9 @@ class StrategyEngine:
             base.reason = f"prob_low({prob_up:.3f}<{long_th:.3f})"
             return base
 
+        trend_label = "above_ema200" if above_ema200 else "momentum_override_below_ema200"
         base.side = "LONG"
-        base.reason = "ok"
+        base.reason = f"ok:{trend_label}"
         return base
 
     # ------------------------------------------------------------------
