@@ -48,6 +48,7 @@ class CoinSelector:
         self.min_atr_pct = min_atr_pct
         self.min_volume_ratio = min_volume_ratio
         self.fetcher = MarketDataFetcher()
+        self.last_processed_timestamp: int | None = None  # Track last scored candle to avoid duplicates
 
     def _score_symbol(self, symbol: str) -> float | None:
 
@@ -72,9 +73,10 @@ class CoinSelector:
 
             vol_ma = df["volume"].rolling(20).mean()
 
-            atr_pct = atr.iloc[-1] / df["close"].iloc[-1]
-            volume_ratio = df["volume"].iloc[-1] / vol_ma.iloc[-1]
-            trend_strength = min(adx.iloc[-1], 40)
+            # Use CLOSED candle only (iloc[-2]), not the currently forming one (iloc[-1])
+            atr_pct = atr.iloc[-2] / df["close"].iloc[-2]
+            volume_ratio = df["volume"].iloc[-2] / vol_ma.iloc[-2]
+            trend_strength = min(adx.iloc[-2], 40)
 
             if atr_pct < self.min_atr_pct:
                 print(f"[CoinSelector] {symbol}: atr_pct too low ({atr_pct:.4f})")
@@ -96,6 +98,17 @@ class CoinSelector:
 
         if not symbols:
             symbols = self.DEFAULT_SYMBOLS
+
+        # Candle-close deduplication: only re-score when a new closed candle arrives
+        # Use BTC/USDT as sentinel (first in universe fetch, avoids redundant scoring)
+        if "BTC/USDT" in symbols:
+            sentinel_df = self.fetcher.fetch_ohlcv("BTC/USDT", self.timeframe, limit=1)
+            if sentinel_df is not None and len(sentinel_df) > 0:
+                current_ts = sentinel_df.iloc[0]["time"]  # timestamp of forming candle
+                if self.last_processed_timestamp == current_ts:
+                    return []  # no new closed candle yet, return empty (stale)
+                # On new closed candle, update and proceed with full rescore
+                self.last_processed_timestamp = current_ts
 
         # Only consider symbols that have a trained model on disk.
         eligible = [s for s in symbols if _has_trained_model(s)]

@@ -28,14 +28,14 @@ class StrategyConfig:
     take_atr_mult:         float = 3.0
 
     # Trailing stop
-    trail_activate_atr_mult: float = 1.0   # activate trail when move >= 1 ATR
-    trail_atr_mult:          float = 1.0   # trail by 1 ATR below peak
+    trail_activate_atr_mult: float = 1.5   # activate trail when move >= 1.5 ATR (relaxed from 1.0)
+    trail_atr_mult:          float = 1.35  # trail by 1.35 ATR below peak (relaxed from 1.0)
 
     # Cooldown
     cooldown_minutes:      int   = 30
 
     # Pyramiding (max_pyramid_adds=0 means disabled)
-    max_pyramid_adds:      int   = 1
+    max_pyramid_adds:      int   = 0  # pyramiding DISABLED to avoid adding into retracements
     pyramid_trigger_pct:   float = 0.005
     pyramid_qty_scales:    List[float] = field(default_factory=lambda: [0.6, 0.4, 0.25])
 
