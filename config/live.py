@@ -46,6 +46,14 @@ class LiveSettings:
         raw_symbols = os.getenv("TRADING_SYMBOLS", "BTC/USDT")
         symbols = [s.strip().upper() for s in raw_symbols.split(",") if s.strip()]
 
+        # allow the operator to blacklist/skip certain symbols via env var
+        # (useful for temporarily disabling a troubled market without
+        # editing code or the main list of symbols).
+        raw_exclude = os.getenv("EXCLUDED_SYMBOLS", "")
+        if raw_exclude:
+            excluded = {s.strip().upper() for s in raw_exclude.split(",") if s.strip()}
+            symbols = [s for s in symbols if s not in excluded]
+
         return cls(
             mode=os.getenv("TRADING_MODE", "paper").strip().lower(),
             symbols=symbols,
@@ -68,6 +76,9 @@ class LiveSettings:
 
         if not self.symbols:
             raise ValueError("No trading symbols configured")
+        # warn if exclusion removed everything
+        if os.getenv("EXCLUDED_SYMBOLS") and not self.symbols:
+            raise ValueError("EXCLUDED_SYMBOLS filtered out all trading symbols")
 
         if self.lookback < 220:
             raise ValueError("LOOKBACK_BARS must be >= 220")

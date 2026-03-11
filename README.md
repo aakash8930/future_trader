@@ -30,6 +30,13 @@ robustness, risk control, and real-world exchange conditions.
 - Model quality gates
 - Automatic symbol disabling
 
+**Symbol configuration:**
+You can specify `TRADING_SYMBOLS` in your environment as a
+comma-separated list.  To temporarily skip particular markets, set
+`EXCLUDED_SYMBOLS` to another comma-separated list; excluded tickers are
+removed from the `TRADING_SYMBOLS` list at startup without any code
+changes.
+
 ## Disclaimer
 This system is provided for educational and research purposes.
 Live trading is disabled by default and requires explicit unlock.
