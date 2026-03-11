@@ -84,8 +84,9 @@ class TradingRunner:
 
         # Stops
         self.stop_loss: float | None = None
-        self.take_profit: float | None = None
-        self._trail_activated: bool = False
+        self.take_profit: float | None = None  # TP1 level (fixed initial target)
+        self._profit_lock_mode: bool = False   # activated when TP1 is hit
+        self.profit_lock_sl: float | None = None  # protected profit zone SL
 
         # Candle-close deduplication: only act once per fully closed candle.
         self.last_processed_candle_time: datetime | None = None
@@ -139,26 +140,30 @@ class TradingRunner:
             pos = self.broker.position
             fp  = _fmt_price(price, self.symbol)
 
-            # ---- Trailing Stop (ATR-based, activates after 1 ATR of profit) ----
-            unrealised_move = price - self.last_entry_price
-            if unrealised_move >= self.cfg.trail_activate_atr_mult * atr:
-                if not self._trail_activated:
-                    # First activation: move stop to breakeven + small fee buffer
-                    self._trail_activated = True
-                    self.stop_loss = max(self.stop_loss, self.last_entry_price * 1.0005)
-                    print(f"🔒 TRAIL ACTIVATED → SL moved to breakeven ({_fmt_price(self.stop_loss, self.symbol)})")
+            # ---- TP1 Check: Activate Profit-Lock Mode ----
+            if price >= self.take_profit and not self._profit_lock_mode:
+                # TP1 HIT → activate profit-lock mode
+                self._profit_lock_mode = True
+                # Calculate protected profit zone: TP1 - 0.5 * ATR
+                self.profit_lock_sl = self.take_profit - 0.5 * atr
+                self.stop_loss = self.profit_lock_sl
+                print(f"✅ TP1 HIT → profit lock activated")
+                print(f"💰 PROFIT LOCK SL → {_fmt_price(self.profit_lock_sl, self.symbol)}")
 
+            # ---- Trailing Stop (only after TP1 is hit) ----
+            if self._profit_lock_mode:
+                # After TP1, use trailing stop (only moves upward, never downward)
                 new_sl = price - self.cfg.trail_atr_mult * atr
                 if new_sl > self.stop_loss:
                     self.stop_loss = new_sl
-                    print(f"🔁 TRAILING SL → {_fmt_price(self.stop_loss, self.symbol)}")
+                    print(f"📈 TRAILING SL → {_fmt_price(self.stop_loss, self.symbol)}")
 
             # ---- Pyramiding ----
             ref_price = self.last_pyramid_price or self.last_entry_price
             move_pct  = (price - ref_price) / ref_price
 
             if (
-                self._trail_activated                           # only add when protected
+                self._profit_lock_mode                       # only add when profit-locked
                 and move_pct >= self.cfg.pyramid_trigger_pct
                 and pos.add_count < self.cfg.max_pyramid_adds
             ):
@@ -176,13 +181,14 @@ class TradingRunner:
                         f"total_qty={pos.qty:.6f}"
                     )
 
-            # ---- Stop Loss ----
+            # ---- Stop Loss Exit ----
             if price <= self.stop_loss:
                 self._close_position(price, "stop_loss")
                 return
 
-            # ---- Take Profit ----
-            if price >= self.take_profit:
+            # ---- Take Profit Exit (only if TP1 not yet hit, or if profit_lock exits via trailing) ----
+            # After TP1 is hit, manage with trailing stop only (no fixed TP cap)
+            if not self._profit_lock_mode and price >= self.take_profit:
                 self._close_position(price, "take_profit")
                 return
 
@@ -221,7 +227,8 @@ class TradingRunner:
         self.last_decision     = dec
         self.stop_loss         = dec.stop_loss
         self.take_profit       = dec.take_profit
-        self._trail_activated  = False
+        self._profit_lock_mode = False
+        self.profit_lock_sl    = None
 
         fp = _fmt_price(dec.price, self.symbol)
         print(
@@ -271,7 +278,8 @@ class TradingRunner:
             print(f"[LOGGER ERROR] {exc}")
 
         self.last_pyramid_price = None
-        self._trail_activated   = False
+        self._profit_lock_mode  = False
+        self.profit_lock_sl     = None
 
         icon = "🛑" if exit_reason == "stop_loss" else "🎯"
         print(

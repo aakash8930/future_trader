@@ -56,8 +56,9 @@ class HistoricalSimulator:
         self.last_decision = None
 
         self.stop_loss:    float | None = None
-        self.take_profit:  float | None = None
-        self._trail_activated: bool = False
+        self.take_profit:  float | None = None  # TP1 level (fixed initial target)
+        self._profit_lock_mode: bool = False    # activated when TP1 is hit
+        self.profit_lock_sl: float | None = None  # protected profit zone SL
 
         # Candle-close deduplication: skip if this candle timestamp was already processed.
         self.last_processed_candle_time: pd.Timestamp | None = None
@@ -95,23 +96,27 @@ class HistoricalSimulator:
         if self.broker.position:
             pos = self.broker.position
 
-            # Trailing stop (same logic as runner)
-            unrealised_move = price - self.last_entry_price
-            if unrealised_move >= self.cfg.trail_activate_atr_mult * atr:
-                if not self._trail_activated:
-                    self._trail_activated = True
-                    self.stop_loss = max(self.stop_loss, self.last_entry_price * 1.0005)
+            # ---- TP1 Check: Activate Profit-Lock Mode ----
+            if price >= self.take_profit and not self._profit_lock_mode:
+                # TP1 HIT → activate profit-lock mode
+                self._profit_lock_mode = True
+                # Calculate protected profit zone: TP1 - 0.5 * ATR
+                self.profit_lock_sl = self.take_profit - 0.5 * atr
+                self.stop_loss = self.profit_lock_sl
 
+            # ---- Trailing Stop (only after TP1 is hit) ----
+            if self._profit_lock_mode:
+                # After TP1, use trailing stop (only moves upward, never downward)
                 new_sl = price - self.cfg.trail_atr_mult * atr
                 if new_sl > self.stop_loss:
                     self.stop_loss = new_sl
 
-            # Pyramiding (same guard as runner: only after breakeven locked)
+            # ---- Pyramiding (same guard as runner: only when profit-locked) ----
             ref_price = self.last_pyramid_price or self.last_entry_price
             move_pct  = (price - ref_price) / ref_price
 
             if (
-                self._trail_activated
+                self._profit_lock_mode
                 and move_pct >= self.cfg.pyramid_trigger_pct
                 and pos.add_count < self.cfg.max_pyramid_adds
             ):
@@ -122,13 +127,14 @@ class HistoricalSimulator:
                     self.broker.position.add_to_position(price, add_qty)
                     self.last_pyramid_price = price
 
-            # Stop loss
+            # ---- Stop Loss Exit ----
             if price <= self.stop_loss:
                 self._close(price, ts, "stop_loss")
                 return
 
-            # Take profit
-            if price >= self.take_profit:
+            # ---- Take Profit Exit (only if TP1 not yet hit) ----
+            # After TP1 is hit, manage with trailing stop only (no fixed TP cap)
+            if not self._profit_lock_mode and price >= self.take_profit:
                 self._close(price, ts, "take_profit")
                 return
 
@@ -168,7 +174,8 @@ class HistoricalSimulator:
         self.last_decision     = dec
         self.stop_loss         = dec.stop_loss
         self.take_profit       = dec.take_profit
-        self._trail_activated  = False
+        self._profit_lock_mode = False
+        self.profit_lock_sl    = None
 
     # ------------------------------------------------------------------
     def _close(self, price: float, ts: datetime, exit_reason: str):
@@ -205,7 +212,8 @@ class HistoricalSimulator:
         })
 
         self.last_pyramid_price = None
-        self._trail_activated   = False
+        self._profit_lock_mode  = False
+        self.profit_lock_sl     = None
 
     # ------------------------------------------------------------------
     def export(self, path: str) -> None:
