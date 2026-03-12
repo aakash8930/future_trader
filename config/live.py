@@ -25,6 +25,7 @@ def _env_int(name: str, default: int) -> int:
 class LiveSettings:
     mode: str = "paper"
     symbols: list[str] = field(default_factory=lambda: ["BTC/USDT"])
+    excluded_symbols: list[str] = field(default_factory=list)
     timeframe: str = "15m"
 
     starting_balance_usdt: float = 500.0
@@ -46,9 +47,15 @@ class LiveSettings:
         raw_symbols = os.getenv("TRADING_SYMBOLS", "BTC/USDT")
         symbols = [s.strip().upper() for s in raw_symbols.split(",") if s.strip()]
 
+        raw_excluded = os.getenv("EXCLUDED_SYMBOLS", "")
+        excluded = [s.strip().upper() for s in raw_excluded.split(",") if s.strip()]
+        if excluded:
+            symbols = [s for s in symbols if s not in excluded]
+
         return cls(
             mode=os.getenv("TRADING_MODE", "paper").strip().lower(),
             symbols=symbols,
+            excluded_symbols=excluded,
             timeframe=os.getenv("TRADING_TIMEFRAME", "15m"),
             starting_balance_usdt=_env_float("PAPER_STARTING_BALANCE_USDT", 500.0),
             cooldown_minutes=_env_int("ENTRY_COOLDOWN_MINUTES", 30),

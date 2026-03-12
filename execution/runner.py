@@ -85,7 +85,9 @@ class TradingRunner:
         # Stops
         self.stop_loss: float | None = None
         self.take_profit: float | None = None
+        self.take_profit_1: float | None = None
         self._trail_activated: bool = False
+        self._profit_lock_activated: bool = False
 
         # Candle-close deduplication: only act once per fully closed candle.
         self.last_processed_candle_time: datetime | None = None
@@ -138,6 +140,14 @@ class TradingRunner:
         if self.broker.position:
             pos = self.broker.position
             fp  = _fmt_price(price, self.symbol)
+
+            # ---- TP1 Profit Lock ----
+            if not self._profit_lock_activated and price >= self.take_profit_1:
+                self._profit_lock_activated = True
+                profit_lock_sl = self.last_entry_price + atr * 0.5
+                self.stop_loss = max(self.stop_loss, profit_lock_sl)
+                print(f"🎯 TP1 HIT → profit lock activated")
+                print(f"🔒 PROFIT LOCK SL → {_fmt_price(self.stop_loss, self.symbol)}")
 
             # ---- Trailing Stop (ATR-based, activates after 1 ATR of profit) ----
             unrealised_move = price - self.last_entry_price
@@ -221,7 +231,9 @@ class TradingRunner:
         self.last_decision     = dec
         self.stop_loss         = dec.stop_loss
         self.take_profit       = dec.take_profit
+        self.take_profit_1     = dec.price + dec.atr * (self.cfg.take_atr_mult / 2)
         self._trail_activated  = False
+        self._profit_lock_activated = False
 
         fp = _fmt_price(dec.price, self.symbol)
         print(
