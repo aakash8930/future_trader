@@ -70,7 +70,7 @@ class CoinSelector:
                 return None
 
             if len(df) < 120:
-                print(f"[CoinSelector] {symbol}: insufficient data ({len(df)} rows)")
+                print(f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: insufficient data ({len(df)} rows)")
                 return None
 
             atr = ta.volatility.AverageTrueRange(
@@ -83,16 +83,33 @@ class CoinSelector:
 
             vol_ma = df["volume"].rolling(20).mean()
 
+            # Use most recent CLOSED candle (iloc[-1])
+            last_volume = df["volume"].iloc[-1]
+            last_vol_ma = vol_ma.iloc[-1]
+
+            # Validate volume data before computing ratio
+            if (
+                last_volume <= 0
+                or last_vol_ma <= 0
+                or not np.isfinite(last_volume)
+                or not np.isfinite(last_vol_ma)
+            ):
+                print(
+                    f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
+                    f"invalid volume data (last={last_volume:.2f}, ma={last_vol_ma:.2f})"
+                )
+                return None
+
             atr_pct = atr.iloc[-1] / df["close"].iloc[-1]
-            volume_ratio = df["volume"].iloc[-1] / vol_ma.iloc[-1]
+            volume_ratio = last_volume / last_vol_ma
             trend_strength = min(adx.iloc[-1], 40)
 
             if atr_pct < self.min_atr_pct:
-                print(f"[CoinSelector] {symbol}: atr_pct too low ({atr_pct:.4f})")
+                print(f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: atr_pct too low ({atr_pct:.4f})")
                 return None
 
             if volume_ratio < self.min_volume_ratio:
-                print(f"[CoinSelector] {symbol}: volume_ratio too low ({volume_ratio:.2f})")
+                print(f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: volume_ratio too low ({volume_ratio:.2f})")
                 return None
 
             score = atr_pct * volume_ratio * trend_strength
@@ -100,7 +117,7 @@ class CoinSelector:
             return float(score)
 
         except Exception as exc:
-            print(f"[CoinSelector] {symbol}: error during scoring — {exc}")
+            print(f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: error during scoring — {exc}")
             return None
 
     def select(self, symbols: list[str]) -> list[str]:
