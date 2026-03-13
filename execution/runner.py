@@ -38,12 +38,19 @@ class TradingRunner:
         cooldown_minutes: int = 30,
         risk_per_trade: float = 0.01,
         config: StrategyConfig | None = None,
+        exchange_name: str = "binance",
+        exchange_fallbacks: list[str] = None,
+        exchange_timeout_ms: int = 20000,
     ):
         self.symbol = symbol
         self.timeframe = timeframe
         self.lookback = lookback
 
-        self.data = MarketDataFetcher()
+        self.data = MarketDataFetcher(
+            exchange_name=exchange_name,
+            fallback_exchanges=exchange_fallbacks,
+            timeout_ms=exchange_timeout_ms,
+        )
 
         base_model = DirectionModel.for_symbol(symbol)
         models = [base_model]
@@ -95,6 +102,11 @@ class TradingRunner:
     def run_once(self):
 
         df = self.data.fetch_ohlcv(self.symbol, self.timeframe, self.lookback)
+
+        # Symbol not supported on active exchange
+        if df is None:
+            print(f"[{self.symbol}] not supported on {self.data.exchange_name}, skipping")
+            return
 
         # ---- Candle-close guard ----
         # iloc[-1] is the still-forming (live) candle — use iloc[-2] as the last

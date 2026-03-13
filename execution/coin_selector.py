@@ -41,13 +41,20 @@ class CoinSelector:
         top_k: int = 4,
         min_atr_pct: float = 0.001,
         min_volume_ratio: float = 0.7,
+        exchange_name: str = "binance",
+        exchange_fallbacks: list[str] = None,
+        exchange_timeout_ms: int = 20000,
     ):
         self.timeframe = timeframe
         self.lookback = lookback
         self.top_k = top_k
         self.min_atr_pct = min_atr_pct
         self.min_volume_ratio = min_volume_ratio
-        self.fetcher = MarketDataFetcher()
+        self.fetcher = MarketDataFetcher(
+            exchange_name=exchange_name,
+            fallback_exchanges=exchange_fallbacks,
+            timeout_ms=exchange_timeout_ms,
+        )
 
     def _score_symbol(self, symbol: str) -> float | None:
 
@@ -58,8 +65,12 @@ class CoinSelector:
                 limit=self.lookback,
             )
 
-            if df is None or len(df) < 120:
-                print(f"[CoinSelector] {symbol}: insufficient data ({len(df) if df is not None else 0} rows)")
+            # Symbol not supported on this exchange
+            if df is None:
+                return None
+
+            if len(df) < 120:
+                print(f"[CoinSelector] {symbol}: insufficient data ({len(df)} rows)")
                 return None
 
             atr = ta.volatility.AverageTrueRange(
@@ -98,9 +109,15 @@ class CoinSelector:
         if not symbols:
             symbols = self.DEFAULT_SYMBOLS
 
+        # Filter out symbols not supported on this exchange
+        supported = [s for s in symbols if self.fetcher.is_symbol_supported(s)]
+        unsupported = [s for s in symbols if s not in supported]
+        if unsupported:
+            print(f"[CoinSelector] Unsupported on {self.fetcher.exchange_name}: {unsupported}")
+
         # Only consider symbols that have a trained model on disk.
-        eligible = [s for s in symbols if _has_trained_model(s)]
-        skipped  = [s for s in symbols if s not in eligible]
+        eligible = [s for s in supported if _has_trained_model(s)]
+        skipped  = [s for s in supported if s not in eligible]
         if skipped:
             print(f"[CoinSelector] Skipped (no model): {skipped}")
 

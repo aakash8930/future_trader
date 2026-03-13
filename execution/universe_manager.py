@@ -18,6 +18,9 @@ class UniverseManager:
         timeframe: str,
         max_active: int,
         refresh_minutes: int = 60,
+        exchange_name: str = "binance",
+        exchange_fallbacks: List[str] = None,
+        exchange_timeout_ms: int = 20000,
     ):
         self.all_symbols = all_symbols
         self.timeframe = timeframe
@@ -27,6 +30,9 @@ class UniverseManager:
         self.selector = CoinSelector(
             timeframe=timeframe,
             top_k=max_active * 2,
+            exchange_name=exchange_name,
+            exchange_fallbacks=exchange_fallbacks,
+            exchange_timeout_ms=exchange_timeout_ms,
         )
 
         self.active_symbols: List[str] = []

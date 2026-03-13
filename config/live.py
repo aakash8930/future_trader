@@ -21,6 +21,10 @@ def _env_int(name: str, default: int) -> int:
     return default if raw is None else int(raw)
 
 
+def _env_str(name: str, default: str) -> str:
+    return os.getenv(name, default).strip()
+
+
 @dataclass(slots=True)
 class LiveSettings:
     mode: str = "paper"
@@ -42,6 +46,11 @@ class LiveSettings:
 
     lookback: int = 300
 
+    # Exchange configuration
+    exchange_name: str = "binance"
+    exchange_fallbacks: list[str] = field(default_factory=lambda: ["bybit", "kraken", "okx"])
+    exchange_timeout_ms: int = 20000
+
     @classmethod
     def from_env(cls) -> "LiveSettings":
         raw_symbols = os.getenv("TRADING_SYMBOLS", "BTC/USDT")
@@ -51,6 +60,10 @@ class LiveSettings:
         excluded = [s.strip().upper() for s in raw_excluded.split(",") if s.strip()]
         if excluded:
             symbols = [s for s in symbols if s not in excluded]
+
+        # Parse exchange fallbacks
+        raw_fallbacks = os.getenv("EXCHANGE_FALLBACKS", "bybit,kraken,okx")
+        fallbacks = [s.strip().lower() for s in raw_fallbacks.split(",") if s.strip()]
 
         return cls(
             mode=os.getenv("TRADING_MODE", "paper").strip().lower(),
@@ -67,6 +80,9 @@ class LiveSettings:
             min_model_val_precision=_env_float("MIN_MODEL_VAL_PRECISION", 0.10),
             min_model_val_recall=_env_float("MIN_MODEL_VAL_RECALL", 0.10),
             lookback=_env_int("LOOKBACK_BARS", 300),
+            exchange_name=_env_str("EXCHANGE_NAME", "binance"),
+            exchange_fallbacks=fallbacks,
+            exchange_timeout_ms=_env_int("EXCHANGE_TIMEOUT_MS", 20000),
         )
 
     def validate(self) -> None:
