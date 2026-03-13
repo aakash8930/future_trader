@@ -12,6 +12,41 @@ from ccxt.base.errors import (
 )
 
 
+def _sanitize_error_msg(error: Exception) -> str:
+    """
+    Sanitize error messages to prevent HTML dumps in logs.
+    Returns a concise one-line summary.
+    """
+    msg = str(error)
+
+    # Detect HTML content
+    if "<html" in msg.lower() or "<!doctype" in msg.lower() or "<body" in msg.lower():
+        # Check for common HTTP status codes in HTML responses
+        if "403" in msg or "forbidden" in msg.lower():
+            return "access blocked (HTTP 403)"
+        if "451" in msg or "unavailable for legal reasons" in msg.lower():
+            return "geo-restricted (HTTP 451)"
+        if "503" in msg or "service unavailable" in msg.lower():
+            return "service unavailable (HTTP 503)"
+        if "cloudfront" in msg.lower():
+            return "blocked by CloudFront"
+        return "blocked (HTML error page)"
+
+    # Check for specific HTTP codes
+    if "451" in msg:
+        return "geo-restricted (HTTP 451)"
+    if "403" in msg:
+        return "access forbidden (HTTP 403)"
+    if "503" in msg:
+        return "service unavailable (HTTP 503)"
+
+    # Truncate very long messages
+    if len(msg) > 150:
+        return msg[:150] + "..."
+
+    return msg
+
+
 class MarketDataFetcher:
     """
     Shared market data fetcher with retry & timeout safety.
@@ -46,7 +81,8 @@ class MarketDataFetcher:
                     markets = MarketDataFetcher._exchange.markets
                     MarketDataFetcher._supported_symbols = set(markets.keys())
                 except Exception as e:
-                    print(f"[FETCHER] Warning: could not load market symbols: {e}")
+                    sanitized = _sanitize_error_msg(e)
+                    print(f"[FETCHER] Warning: could not load market symbols: {sanitized}")
                     MarketDataFetcher._supported_symbols = set()
 
         self.exchange = MarketDataFetcher._exchange
@@ -66,9 +102,14 @@ class MarketDataFetcher:
         attempts = [primary_exchange] + fallbacks
         errors = {}
 
-        for exchange_name in attempts:
+        for idx, exchange_name in enumerate(attempts):
             try:
-                print(f"[FETCHER] attempting to connect to {exchange_name}...")
+                # Show fallback message for non-primary exchanges
+                if idx > 0:
+                    print(f"[FETCHER] trying fallback exchange: {exchange_name}")
+                else:
+                    print(f"[FETCHER] attempting to connect to {exchange_name}...")
+
                 exchange = self._create_exchange(exchange_name, timeout_ms)
 
                 # Critical: load_markets() can fail with 451 or NetworkError
@@ -78,24 +119,24 @@ class MarketDataFetcher:
                 return exchange, exchange_name
 
             except ExchangeNotAvailable as e:
-                msg = str(e)
-                if "451" in msg or "geo" in msg.lower():
-                    errors[exchange_name] = f"geo-restricted (HTTP 451)"
-                else:
-                    errors[exchange_name] = f"unavailable: {e}"
-                print(f"[FETCHER] {exchange_name} unavailable: {errors[exchange_name]}")
+                sanitized = _sanitize_error_msg(e)
+                errors[exchange_name] = f"unavailable: {sanitized}"
+                print(f"[FETCHER] {exchange_name} unavailable: {sanitized}")
 
             except (NetworkError, RequestTimeout) as e:
-                errors[exchange_name] = f"network error: {e}"
-                print(f"[FETCHER] {exchange_name} network error: {e}")
+                sanitized = _sanitize_error_msg(e)
+                errors[exchange_name] = f"network error: {sanitized}"
+                print(f"[FETCHER] {exchange_name} network error: {sanitized}")
 
             except ExchangeError as e:
-                errors[exchange_name] = f"exchange error: {e}"
-                print(f"[FETCHER] {exchange_name} exchange error: {e}")
+                sanitized = _sanitize_error_msg(e)
+                errors[exchange_name] = f"exchange error: {sanitized}"
+                print(f"[FETCHER] {exchange_name} exchange error: {sanitized}")
 
             except Exception as e:
-                errors[exchange_name] = f"unexpected error: {e}"
-                print(f"[FETCHER] {exchange_name} unexpected error: {e}")
+                sanitized = _sanitize_error_msg(e)
+                errors[exchange_name] = f"unexpected error: {sanitized}"
+                print(f"[FETCHER] {exchange_name} unexpected error: {sanitized}")
 
         # All exchanges failed - generate clean error message
         error_summary = "\n".join(f"  - {name}: {err}" for name, err in errors.items())
