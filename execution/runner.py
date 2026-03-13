@@ -41,6 +41,7 @@ class TradingRunner:
         exchange_name: str = "binance",
         exchange_fallbacks: list[str] = None,
         exchange_timeout_ms: int = 20000,
+        logger: TradeLogger | None = None,
     ):
         self.symbol = symbol
         self.timeframe = timeframe
@@ -74,7 +75,7 @@ class TradingRunner:
         self.risk_state = RiskState(starting_balance_usdt)
 
         self.broker = ShadowBroker()
-        self.logger = TradeLogger()
+        self.logger = logger if logger is not None else TradeLogger()
 
         self.report = DailyAIReport()
 

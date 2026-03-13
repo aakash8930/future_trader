@@ -7,6 +7,7 @@ from pathlib import Path
 from execution.runner import TradingRunner
 from execution.universe_manager import UniverseManager
 from config.live import LiveSettings
+from logs.logger import TradeLogger
 
 
 class MultiSymbolTradingSystem:
@@ -14,8 +15,9 @@ class MultiSymbolTradingSystem:
     Fully autonomous multi-symbol trading system.
     """
 
-    def __init__(self, settings: LiveSettings):
+    def __init__(self, settings: LiveSettings, logger: TradeLogger):
         self.settings = settings
+        self.logger = logger
         self.runners: dict[str, TradingRunner] = {}
 
         self.universe = UniverseManager(
@@ -65,6 +67,7 @@ class MultiSymbolTradingSystem:
             exchange_name=self.settings.exchange_name,
             exchange_fallbacks=self.settings.exchange_fallbacks,
             exchange_timeout_ms=self.settings.exchange_timeout_ms,
+            logger=self.logger,
         )
 
         self.runners[symbol] = runner

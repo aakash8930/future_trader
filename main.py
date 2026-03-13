@@ -4,6 +4,7 @@ from config.env_loader import load_env_file
 from config.live import LiveSettings
 from execution.runner import TradingRunner
 from execution.multi_runner import MultiSymbolTradingSystem
+from logs.logger import TradeLogger
 
 
 def main():
@@ -14,12 +15,15 @@ def main():
     settings = LiveSettings.from_env()
     settings.validate()
 
+    # Create single shared logger
+    logger = TradeLogger()
+
     try:
         # -------------------------------
         # MULTI-SYMBOL AUTONOMOUS MODE
         # -------------------------------
         if len(settings.symbols) > 1:
-            system = MultiSymbolTradingSystem(settings)
+            system = MultiSymbolTradingSystem(settings, logger)
             system.run_loop()
             return
 
@@ -39,6 +43,7 @@ def main():
             exchange_name=settings.exchange_name,
             exchange_fallbacks=settings.exchange_fallbacks,
             exchange_timeout_ms=settings.exchange_timeout_ms,
+            logger=logger,
         )
 
         runner.run_loop(sleep_seconds=settings.sleep_seconds)
