@@ -11,6 +11,10 @@ class TradeLogger:
         database_url = (
             os.getenv("DATABASE_PUBLIC_URL") or os.getenv("DATABASE_URL")
         )
+        if not database_url:
+            print("[LOGGER] No DATABASE_URL set — trade logging disabled.")
+            self.conn = None
+            return
         self.conn = psycopg2.connect(database_url)
         self.conn.autocommit = True
         self._ensure_schema()
@@ -91,6 +95,8 @@ class TradeLogger:
         exit_reason: str          = "",
         add_count:   int          = 0,
     ):
+        if self.conn is None:
+            return
         try:
             with self.conn.cursor() as cur:
                 cur.execute(
