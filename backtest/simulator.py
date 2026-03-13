@@ -3,9 +3,8 @@
 Historical simulator — uses IDENTICAL logic to execution/runner.py:
   - Same StrategyEngine filters and entry thresholds
   - Same ATR-based stop loss / take profit
-  - Same trail activation and trail distance
+  - Same TP1-triggered profit-lock model and trailing distance
   - Same cooldown
-  - Same pyramiding constraints
 """
 
 from datetime import datetime, timedelta
@@ -49,15 +48,14 @@ class HistoricalSimulator:
         # Position state (mirrors runner.py)
         self.last_entry_time:  datetime | None = None
         self.last_entry_price: float   | None = None
-        self.last_entry_qty:   float   | None = None
         self.last_entry_prob:  float   | None = None
         self.last_entry_side:  str     | None = None
-        self.last_pyramid_price: float | None = None
         self.last_decision = None
 
         self.stop_loss:    float | None = None
         self.take_profit:  float | None = None
-        self._trail_activated: bool = False
+        self.take_profit_1: float | None = None
+        self._profit_lock_activated: bool = False
 
         # Candle-close deduplication: skip if this candle timestamp was already processed.
         self.last_processed_candle_time: pd.Timestamp | None = None
@@ -95,32 +93,17 @@ class HistoricalSimulator:
         if self.broker.position:
             pos = self.broker.position
 
-            # Trailing stop (same logic as runner)
-            unrealised_move = price - self.last_entry_price
-            if unrealised_move >= self.cfg.trail_activate_atr_mult * atr:
-                if not self._trail_activated:
-                    self._trail_activated = True
-                    self.stop_loss = max(self.stop_loss, self.last_entry_price * 1.0005)
+            # TP1 profit lock (mirrors runner.py)
+            if not self._profit_lock_activated and price >= self.take_profit_1:
+                self._profit_lock_activated = True
+                profit_lock_sl = self.last_entry_price + atr * 0.5
+                self.stop_loss = max(self.stop_loss, profit_lock_sl)
 
+            # Trailing (post-TP1 only, SL can only move upward)
+            if self._profit_lock_activated:
                 new_sl = price - self.cfg.trail_atr_mult * atr
                 if new_sl > self.stop_loss:
                     self.stop_loss = new_sl
-
-            # Pyramiding (same guard as runner: only after breakeven locked)
-            ref_price = self.last_pyramid_price or self.last_entry_price
-            move_pct  = (price - ref_price) / ref_price
-
-            if (
-                self._trail_activated
-                and move_pct >= self.cfg.pyramid_trigger_pct
-                and pos.add_count < self.cfg.max_pyramid_adds
-            ):
-                scale   = self.cfg.pyramid_qty_scales[pos.add_count]
-                add_qty = self.last_entry_qty * scale
-                max_notional = self.last_entry_price * self.last_entry_qty * 2.0
-                if pos.avg_entry * (pos.qty + add_qty) <= max_notional:
-                    self.broker.position.add_to_position(price, add_qty)
-                    self.last_pyramid_price = price
 
             # Stop loss
             if price <= self.stop_loss:
@@ -161,14 +144,13 @@ class HistoricalSimulator:
 
         self.last_entry_time   = ts
         self.last_entry_price  = dec.price
-        self.last_entry_qty    = qty
         self.last_entry_prob   = dec.prob
         self.last_entry_side   = dec.side
-        self.last_pyramid_price = None
         self.last_decision     = dec
         self.stop_loss         = dec.stop_loss
         self.take_profit       = dec.take_profit
-        self._trail_activated  = False
+        self.take_profit_1     = dec.price + dec.atr * (self.cfg.take_atr_mult / 2)
+        self._profit_lock_activated = False
 
     # ------------------------------------------------------------------
     def _close(self, price: float, ts: datetime, exit_reason: str):
@@ -203,9 +185,6 @@ class HistoricalSimulator:
             "exit_reason": exit_reason,
             "add_count":   add_count,
         })
-
-        self.last_pyramid_price = None
-        self._trail_activated   = False
 
     # ------------------------------------------------------------------
     def export(self, path: str) -> None:

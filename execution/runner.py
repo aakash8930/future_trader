@@ -76,17 +76,14 @@ class TradingRunner:
 
         # Position state
         self.last_entry_price: float | None = None
-        self.last_entry_qty: float | None = None      # initial qty (base for pyramid scale)
         self.last_entry_prob: float | None = None
         self.last_entry_side: str | None = None
-        self.last_pyramid_price: float | None = None  # price at last pyramid add
         self.last_decision = None                      # SignalDecision snapshot at entry
 
         # Stops
         self.stop_loss: float | None = None
         self.take_profit: float | None = None
         self.take_profit_1: float | None = None
-        self._trail_activated: bool = False
         self._profit_lock_activated: bool = False
 
         # Candle-close deduplication: only act once per fully closed candle.
@@ -149,42 +146,12 @@ class TradingRunner:
                 print(f"🎯 TP1 HIT → profit lock activated")
                 print(f"🔒 PROFIT LOCK SL → {_fmt_price(self.stop_loss, self.symbol)}")
 
-            # ---- Trailing Stop (ATR-based, activates after 1 ATR of profit) ----
-            unrealised_move = price - self.last_entry_price
-            if unrealised_move >= self.cfg.trail_activate_atr_mult * atr:
-                if not self._trail_activated:
-                    # First activation: move stop to breakeven + small fee buffer
-                    self._trail_activated = True
-                    self.stop_loss = max(self.stop_loss, self.last_entry_price * 1.0005)
-                    print(f"🔒 TRAIL ACTIVATED → SL moved to breakeven ({_fmt_price(self.stop_loss, self.symbol)})")
-
+            # ---- Trailing (post-TP1 only, SL can only move upward) ----
+            if self._profit_lock_activated:
                 new_sl = price - self.cfg.trail_atr_mult * atr
                 if new_sl > self.stop_loss:
                     self.stop_loss = new_sl
                     print(f"🔁 TRAILING SL → {_fmt_price(self.stop_loss, self.symbol)}")
-
-            # ---- Pyramiding ----
-            ref_price = self.last_pyramid_price or self.last_entry_price
-            move_pct  = (price - ref_price) / ref_price
-
-            if (
-                self._trail_activated                           # only add when protected
-                and move_pct >= self.cfg.pyramid_trigger_pct
-                and pos.add_count < self.cfg.max_pyramid_adds
-            ):
-                scale   = self.cfg.pyramid_qty_scales[pos.add_count]
-                add_qty = self.last_entry_qty * scale
-
-                # Notional safety cap
-                max_notional = self.last_entry_price * self.last_entry_qty * 2.0
-                if pos.avg_entry * (pos.qty + add_qty) <= max_notional:
-                    self.broker.add_to_position(price, add_qty)
-                    self.last_pyramid_price = price
-                    print(
-                        f"➕ PYRAMID ADD #{pos.add_count} | price={fp} "
-                        f"qty={add_qty:.6f} avg_entry={_fmt_price(pos.avg_entry, self.symbol)} "
-                        f"total_qty={pos.qty:.6f}"
-                    )
 
             # ---- Stop Loss ----
             if price <= self.stop_loss:
@@ -224,15 +191,12 @@ class TradingRunner:
 
         self.last_trade_time   = datetime.utcnow()
         self.last_entry_price  = dec.price
-        self.last_entry_qty    = qty
         self.last_entry_prob   = dec.prob
         self.last_entry_side   = dec.side
-        self.last_pyramid_price = None
         self.last_decision     = dec
         self.stop_loss         = dec.stop_loss
         self.take_profit       = dec.take_profit
         self.take_profit_1     = dec.price + dec.atr * (self.cfg.take_atr_mult / 2)
-        self._trail_activated  = False
         self._profit_lock_activated = False
 
         fp = _fmt_price(dec.price, self.symbol)
@@ -281,9 +245,6 @@ class TradingRunner:
             )
         except Exception as exc:
             print(f"[LOGGER ERROR] {exc}")
-
-        self.last_pyramid_price = None
-        self._trail_activated   = False
 
         icon = "🛑" if exit_reason == "stop_loss" else "🎯"
         print(
