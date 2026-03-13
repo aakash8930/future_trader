@@ -2,22 +2,26 @@
 
 import os
 import psycopg2
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class TradeLogger:
 
     def __init__(self):
-        database_url = (
-            os.getenv("DATABASE_PUBLIC_URL") or os.getenv("DATABASE_URL")
-        )
+        database_url = os.getenv("DATABASE_PUBLIC_URL") or os.getenv("DATABASE_URL")
         if not database_url:
             print("[LOGGER] No DATABASE_URL set — trade logging disabled.")
             self.conn = None
             return
-        self.conn = psycopg2.connect(database_url)
-        self.conn.autocommit = True
-        self._ensure_schema()
+
+        try:
+            self.conn = psycopg2.connect(database_url)
+            self.conn.autocommit = True
+            self._ensure_schema()
+            print("[LOGGER] PostgreSQL connected and schema ready.")
+        except Exception as exc:
+            print(f"[LOGGER] Database connection failed — trade logging disabled. Error: {exc}")
+            self.conn = None
 
     # ------------------------------------------------------------------
     def _ensure_schema(self):
@@ -111,7 +115,7 @@ class TradeLogger:
                         (%s,%s,%s, %s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s,%s)
                     """,
                     (
-                        datetime.utcnow(),
+                        datetime.now(timezone.utc),
                         symbol, side,
                         entry_price, avg_entry if avg_entry is not None else entry_price,
                         exit_price, qty,

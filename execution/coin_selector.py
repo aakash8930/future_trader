@@ -94,6 +94,7 @@ class CoinSelector:
 
     def select(self, symbols: list[str]) -> list[str]:
 
+        configured_symbols = symbols  # Store original input before fallback
         if not symbols:
             symbols = self.DEFAULT_SYMBOLS
 
@@ -119,9 +120,14 @@ class CoinSelector:
         )
 
         if not ranked:
-            print("⚠️ CoinSelector empty → fallback to default symbols with trained models")
-            fallback = [s for s in self.DEFAULT_SYMBOLS if _has_trained_model(s)]
-            return fallback[: self.top_k] or self.DEFAULT_SYMBOLS[: self.top_k]
+            # Prefer configured symbols, only fall back to DEFAULT_SYMBOLS if none provided
+            if configured_symbols:
+                print("⚠️ CoinSelector empty → fallback to configured symbols with trained models")
+                fallback = [s for s in configured_symbols if _has_trained_model(s)]
+            else:
+                print("⚠️ CoinSelector empty → fallback to default symbols with trained models")
+                fallback = [s for s in self.DEFAULT_SYMBOLS if _has_trained_model(s)]
+            return fallback[: self.top_k] or configured_symbols[: self.top_k] or self.DEFAULT_SYMBOLS[: self.top_k]
 
         selected = ranked[: self.top_k]
 
