@@ -6,10 +6,6 @@ from typing import List
 
 from execution.coin_selector import CoinSelector, _has_trained_model
 
-# Exchanges where CoinSelector volume/ATR ranking is unreliable.
-# On these exchanges we use configured symbols directly.
-_FALLBACK_EXCHANGES = {"kraken", "bybit", "okx"}
-
 
 class UniverseManager:
     """
@@ -44,33 +40,31 @@ class UniverseManager:
         self.last_refresh = 0
 
     # ----------------------------------
-    def _select_for_fallback_exchange(self) -> List[str]:
+    def _active_exchange_name(self) -> str:
         """
-        On fallback exchanges (kraken, bybit, okx, …) skip CoinSelector
-        ranking entirely.  Apply only symbol-support and trained-model checks
-        against the configured symbol list, then return it directly.
+        Read the currently active exchange from the shared MarketDataFetcher
+        singleton via the selector's fetcher instance.
+        """
+        active = getattr(self.selector.fetcher, "exchange_name", None)
+        if not active:
+            active = self.exchange_name
+        return str(active).lower()
+
+    # ----------------------------------
+    def _select_configured_symbols_direct(self, active_exchange: str) -> List[str]:
+        """
+        On non-binance exchanges skip CoinSelector ranking entirely and
+        use configured symbols directly after compatibility/model filtering.
         """
         print(
-            f"[Universe] fallback exchange {self.exchange_name} detected "
+            f"[Universe] fallback exchange {active_exchange} detected "
             f"→ using configured symbols directly"
         )
 
         fetcher = self.selector.fetcher
 
-        supported = [
-            s for s in self.all_symbols if fetcher.is_symbol_supported(s)
-        ]
-        unsupported = [s for s in self.all_symbols if s not in supported]
-        if unsupported:
-            print(
-                f"[Universe] Unsupported on {self.exchange_name}: {unsupported}"
-            )
-
+        supported = [s for s in self.all_symbols if fetcher.is_symbol_supported(s)]
         eligible = [s for s in supported if _has_trained_model(s)]
-        skipped = [s for s in supported if s not in eligible]
-        if skipped:
-            print(f"[Universe] Skipped (no model): {skipped}")
-
         return eligible[: self.max_active]
 
     # ----------------------------------
@@ -80,12 +74,13 @@ class UniverseManager:
             return self.active_symbols
 
         self.last_refresh = now
+        active_exchange = self._active_exchange_name()
 
-        if self.exchange_name in _FALLBACK_EXCHANGES:
-            self.active_symbols = self._select_for_fallback_exchange()
-        else:
+        if active_exchange == "binance":
             ranked = self.selector.select(self.all_symbols)
             self.active_symbols = ranked[: self.max_active]
+        else:
+            self.active_symbols = self._select_configured_symbols_direct(active_exchange)
 
         print(f"🔄 Universe updated → {self.active_symbols}")
 
