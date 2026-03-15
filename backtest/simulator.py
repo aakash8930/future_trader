@@ -25,12 +25,13 @@ class HistoricalSimulator:
         self,
         model_path: str,
         scaler_path: str,
+        metadata_path: str,
         starting_balance: float = 500.0,
         lookback: int = 300,
         config: StrategyConfig | None = None,
         risk_per_trade: float = 0.01,
     ):
-        self.model = DirectionModel(model_path, scaler_path)
+        self.model = DirectionModel(model_path, scaler_path, metadata_path)
         self.cfg   = config or StrategyConfig()
 
         self.strategy     = StrategyEngine(self.model, risk_per_trade, self.cfg)

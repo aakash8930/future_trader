@@ -24,10 +24,10 @@ def performance_summary(df: pd.DataFrame) -> dict:
 
     expectancy = win_rate * avg_win - (1 - win_rate) * avg_loss
 
-    equity = df["balance"]
+    equity = df["balance"].astype(float)
     peak = equity.cummax()
-    drawdown = (peak - equity) / peak
-    max_dd = drawdown.max()
+    drawdown = (peak - equity) / peak.replace(0, pd.NA)
+    max_dd = drawdown.fillna(0.0).max()
 
     return {
         "trades": len(df),

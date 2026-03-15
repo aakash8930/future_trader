@@ -53,9 +53,12 @@ def main():
     df = fetch_history(SYMBOL, TIMEFRAME, CANDLES)
     print(f"Fetched {len(df)} candles")
 
+    model_dir = f"models/{SYMBOL.replace('/', '_')}"
+
     sim = HistoricalSimulator(
-        model_path="models/ai_model.pt",
-        scaler_path="models/scaler.save",
+        model_path=f"{model_dir}/model.pt",
+        scaler_path=f"{model_dir}/scaler.save",
+        metadata_path=f"{model_dir}/metadata.json",
     )
 
     print("Running simulation...")

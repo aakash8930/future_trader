@@ -53,9 +53,12 @@ class RiskState:
             return False
 
         # Drawdown kill-switch
-        drawdown = (
-            self.daily_start_balance - self.current_balance
-        ) / self.daily_start_balance
+        if self.daily_start_balance <= 0:
+            drawdown = 0.0
+        else:
+            drawdown = (
+                self.daily_start_balance - self.current_balance
+            ) / self.daily_start_balance
 
         if drawdown >= limits.max_daily_loss_pct:
             self.trading_blocked = True

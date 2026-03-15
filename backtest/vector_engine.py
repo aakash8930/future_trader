@@ -31,6 +31,7 @@ class VectorBacktestEngine:
         timeframe: str,
         model_path: str,
         scaler_path: str,
+        metadata_path: str,
         lookback: int = 300,
         fee_pct: float = 0.0012,
         slippage_pct: float = 0.0010,
@@ -42,7 +43,7 @@ class VectorBacktestEngine:
         self.slippage_pct = slippage_pct
 
         self.data = MarketDataFetcher()
-        self.model = DirectionModel(model_path, scaler_path)
+        self.model = DirectionModel(model_path, scaler_path, metadata_path)
 
     def run(self, limit: int = 10_000) -> pd.DataFrame:
         df = self.data.fetch_ohlcv(self.symbol, self.timeframe, limit=limit)
@@ -79,9 +80,9 @@ class VectorBacktestEngine:
         turn = df["position"].diff().abs().fillna(df["position"].abs())
         per_side_cost = self.fee_pct + self.slippage_pct
         df["fees"] = turn * per_side_cost
-        df["net_ret"] = df["strategy_ret"] - df["fees"]
+        df["net_ret"] = (df["strategy_ret"] - df["fees"]).fillna(0.0)
 
         # ---- Equity ----
-        df["equity"] = (1 + df["net_ret"]).cumprod()
+        df["equity"] = (1 + df["net_ret"]).cumprod().fillna(1.0)
 
         return df

@@ -19,6 +19,7 @@ class BacktestEngine:
         timeframe: str,
         model_path: str,
         scaler_path: str,
+        metadata_path: str,
         lookback: int = 300,
     ):
         self.symbol = symbol
@@ -26,7 +27,7 @@ class BacktestEngine:
         self.lookback = lookback
 
         self.data = MarketDataFetcher()
-        self.model = DirectionModel(model_path, scaler_path)
+        self.model = DirectionModel(model_path, scaler_path, metadata_path)
 
     def run(self, limit: int = 2000) -> pd.DataFrame:
         df = self.data.fetch_ohlcv(self.symbol, self.timeframe, limit)

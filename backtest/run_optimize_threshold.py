@@ -22,6 +22,7 @@ def main():
         symbol=symbol,
         model_path=f"{model_dir}/model.pt",
         scaler_path=f"{model_dir}/scaler.save",
+        metadata_path=f"{model_dir}/metadata.json",
     )
 
     print("\n===== BEST THRESHOLD =====")
@@ -57,6 +58,7 @@ def main():
         timeframe="15m",
         model_path="models/BTC_USDT/model.pt",
         scaler_path="models/BTC_USDT/scaler.save",
+        metadata_path="models/BTC_USDT/metadata.json",
     )
     
 

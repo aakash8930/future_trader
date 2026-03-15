@@ -15,11 +15,15 @@ except ModuleNotFoundError:
 
 
 def main():
+    symbol = "BTC/USDT"
+    model_dir = f"models/{symbol.replace('/', '_')}"
+
     bt = BacktestEngine(
-        symbol="BTC/USDT",
+        symbol=symbol,
         timeframe="15m",
-        model_path="models/ai_model.pt",
-        scaler_path="models/scaler.save",
+        model_path=f"{model_dir}/model.pt",
+        scaler_path=f"{model_dir}/scaler.save",
+        metadata_path=f"{model_dir}/metadata.json",
     )
 
     df = bt.run(limit=1000)

@@ -50,25 +50,37 @@ def fetch_history() -> pd.DataFrame:
     )
 
 
-def compute_metrics(trades: pd.DataFrame) -> dict:
+def compute_metrics(trades: pd.DataFrame, initial_balance: float) -> dict:
+    if trades.empty:
+        return {
+            "trades": 0,
+            "win_rate": 0.0,
+            "expectancy": 0.0,
+            "max_dd": 0.0,
+            "final_equity": float(initial_balance),
+        }
+
     wins = trades[trades["pnl"] > 0]
     losses = trades[trades["pnl"] <= 0]
 
     win_rate = len(wins) / len(trades)
-    avg_win = wins["pnl"].mean()
-    avg_loss = abs(losses["pnl"].mean())
+    avg_win = float(wins["pnl"].mean()) if not wins.empty else 0.0
+    avg_loss = abs(float(losses["pnl"].mean())) if not losses.empty else 0.0
 
     expectancy = win_rate * avg_win - (1 - win_rate) * avg_loss
 
-    equity = trades["balance"]
+    equity = trades["balance"].astype(float)
     peak = equity.cummax()
-    drawdown = (peak - equity) / peak
+    drawdown = (peak - equity) / peak.replace(0, pd.NA)
+    max_dd = float(drawdown.fillna(0.0).max())
+    final_equity = float(equity.iloc[-1]) if not equity.empty else float(initial_balance)
 
     return {
         "trades": len(trades),
-        "win_rate": win_rate,
-        "expectancy": expectancy,
-        "max_dd": drawdown.max(),
+        "win_rate": float(win_rate),
+        "expectancy": float(expectancy),
+        "max_dd": max_dd,
+        "final_equity": final_equity,
     }
 
 
@@ -86,10 +98,14 @@ def main():
 
         print(f"\n--- Walk Forward Segment {segment} ---")
 
+        model_dir = f"models/{SYMBOL.replace('/', '_')}"
+        initial_balance = 500.0
+
         sim = HistoricalSimulator(
-            model_path="models/ai_model.pt",
-            scaler_path="models/scaler.save",
-            starting_balance=500.0,
+            model_path=f"{model_dir}/model.pt",
+            scaler_path=f"{model_dir}/scaler.save",
+            metadata_path=f"{model_dir}/metadata.json",
+            starting_balance=initial_balance,
         )
 
         for i in range(sim.lookback, len(test_df)):
@@ -97,18 +113,16 @@ def main():
             sim.step(window)
 
         trades = pd.DataFrame(sim.trades)
-        if trades.empty:
-            print("No trades.")
-        else:
-            metrics = compute_metrics(trades)
-            results.append({"segment": segment, **metrics})
+        metrics = compute_metrics(trades, initial_balance=initial_balance)
+        results.append({"segment": segment, **metrics})
 
-            print(
-                f"Trades={metrics['trades']} | "
-                f"WinRate={metrics['win_rate']:.3f} | "
-                f"Expectancy={metrics['expectancy']:.4f} | "
-                f"MaxDD={metrics['max_dd']:.4f}"
-            )
+        print(
+            f"Trades={metrics['trades']} | "
+            f"WinRate={metrics['win_rate']:.3f} | "
+            f"Expectancy={metrics['expectancy']:.4f} | "
+            f"MaxDD={metrics['max_dd']:.4f} | "
+            f"FinalEquity={metrics['final_equity']:.2f}"
+        )
 
         start += TEST_SIZE
         segment += 1

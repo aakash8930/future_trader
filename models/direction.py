@@ -35,7 +35,7 @@ class DirectionModel:
         self,
         model_path: str,
         scaler_path: str,
-        metadata_path: str | None = None,
+        metadata_path: str,
     ):
         self.model_name = MODEL_NAME
         self.model_version = MODEL_VERSION
@@ -56,19 +56,36 @@ class DirectionModel:
             "breakout_strength",
         ]
 
-        self.metadata: dict = {}
-        if metadata_path and os.path.exists(metadata_path):
-            with open(metadata_path, "r", encoding="utf-8") as f:
-                self.metadata = json.load(f)
+        if not os.path.exists(metadata_path):
+            raise FileNotFoundError(f"Metadata file not found: {metadata_path}")
 
-            self.feature_columns = self.metadata.get(
-                "feature_columns", self.feature_columns
-            )
-            self.model_name = self.metadata.get("model_name", self.model_name)
-            self.model_version = self.metadata.get("model_version", self.model_version)
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            self.metadata = json.load(f)
+
+        self.feature_columns = self.metadata.get(
+            "feature_columns", self.feature_columns
+        )
+        self.model_name = self.metadata.get("model_name", self.model_name)
+        self.model_version = self.metadata.get("model_version", self.model_version)
 
         self.model = self._load_model(model_path)
         self.scaler = joblib.load(scaler_path)
+
+        scaler_features = getattr(self.scaler, "n_features_in_", None)
+        model_input_dim = int(self.model.net[0].in_features)
+        feature_count = len(self.feature_columns)
+
+        if scaler_features is not None and int(scaler_features) != feature_count:
+            raise ValueError(
+                "Feature mismatch between metadata and scaler: "
+                f"metadata={feature_count}, scaler={int(scaler_features)}"
+            )
+
+        if model_input_dim != feature_count:
+            raise ValueError(
+                "Feature mismatch between metadata and model: "
+                f"metadata={feature_count}, model_input={model_input_dim}"
+            )
 
         opt_th = self.metadata.get("optimized_long_threshold")
         if opt_th is not None:

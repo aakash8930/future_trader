@@ -5,23 +5,38 @@
   "feature_columns": [
     "ema_fast",
     "ema_slow",
+    "ema_spread",
+    "dist_ema200",
+    "ema_fast_slope",
     "rsi",
+    "rsi_delta",
     "ret",
     "vol",
+    "volume_zscore",
     "atr_pct",
-    "adx"
+    "adx",
+    "breakout_strength"
   ],
-  "horizon": 5,
-  "atr_multiplier": 0.8,
+  "horizon": 12,
+  "stop_atr_mult": 2.0,
+  "take_atr_mult": 3.0,
   "timeframe": "15m",
-  "train_rows": 626,
-  "val_rows": 160,
-  "trained_at_utc": "2026-03-03T01:34:14.766307+00:00",
+  "optimized_long_threshold": 0.56,
+  "threshold_optimization": {
+    "precision": 0.7307692307692307,
+    "recall": 0.48717948717948717,
+    "f1": 0.5846153846153846,
+    "trade_rate": 0.16455696202531644,
+    "score": 0.6820512820512821
+  },
+  "train_rows": 621,
+  "val_rows": 158,
+  "trained_at_utc": "2026-03-15T02:21:10.444352+00:00",
   "metrics": {
-    "val_accuracy": 0.75625,
-    "val_precision": 0.36666666666666664,
-    "val_recall": 0.3548387096774194,
-    "val_f1": 0.36065573770491804,
-    "val_positive_rate": 0.1875
+    "val_accuracy": 0.8291139240506329,
+    "val_precision": 0.7307692307692307,
+    "val_recall": 0.48717948717948717,
+    "val_f1": 0.5846153846153846,
+    "val_positive_rate": 0.16455696202531644
   }
 }

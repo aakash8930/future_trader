@@ -26,8 +26,8 @@ class StrategyConfig:
     base_long_threshold:   float = 0.58   # overridden by model.long_threshold at runtime
 
     # ATR-based stop / take-profit
-    stop_atr_mult:         float = 2.0
-    take_atr_mult:         float = 3.0
+    stop_atr_mult:         float = 1.7
+    take_atr_mult:         float = 3.5
 
     # Execution cost / edge filter (round-trip estimate)
     fee_pct_per_side:      float = 0.0010
@@ -108,6 +108,7 @@ class StrategyEngine:
         ema200   = float(row["ema200"])
         ema_fast = float(row["ema_fast"])
         ema_slow = float(row["ema_slow"])
+        ema50    = ema_fast
         atr      = float(row["atr"])
         adx      = float(row["adx"])
         atr_pct  = float(row["atr_pct"])
@@ -155,11 +156,7 @@ class StrategyEngine:
         #                     slightly below ema200 — requires faster EMA cross,
         #                     meaningful trend strength, and higher model confidence.
         above_ema200 = price > ema200
-        momentum_override = (
-            ema_fast > ema_slow
-            and adx >= 25
-            and prob_up >= long_th + 0.02
-        )
+        momentum_override = (ema50 > ema200 and adx >= 25)
 
         if not above_ema200 and not momentum_override:
             base.reason = f"price_below_ema200({price:.4f}<={ema200:.4f})"

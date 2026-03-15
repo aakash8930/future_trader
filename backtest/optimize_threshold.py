@@ -10,6 +10,7 @@ def optimize_long_threshold(
     symbol: str,
     model_path: str,
     scaler_path: str,
+    metadata_path: str,
     timeframe: str = "15m",
     lookback: int = 300,
     limit: int = 20_000,
@@ -19,6 +20,7 @@ def optimize_long_threshold(
         timeframe=timeframe,
         model_path=model_path,
         scaler_path=scaler_path,
+        metadata_path=metadata_path,
         lookback=lookback,
     )
 
@@ -53,10 +55,10 @@ def optimize_long_threshold(
         expectancy = float(trade_rets.mean())
         win_rate = float((trade_rets > 0).mean())
 
-        equity = (1 + net_ret).cumprod()
+        equity = (1 + net_ret).cumprod().fillna(1.0)
         peak = equity.cummax()
-        drawdown = (peak - equity) / peak
-        max_dd = float(drawdown.max())
+        drawdown = (peak - equity) / peak.replace(0, pd.NA)
+        max_dd = float(drawdown.fillna(0.0).max())
 
         score = expectancy / (max_dd + 1e-6)
 
