@@ -16,14 +16,14 @@ from risk.sizing import fixed_fractional_size
 class StrategyConfig:
     """Single source of truth for all strategy parameters."""
     # Signal filters
-    min_prob:              float = 0.58
+    min_prob:              float = 0.52
     min_adx:               float = 15.0
     min_atr_pct:           float = 0.001
     rsi_long_min:          float = 48.0
     rsi_long_max:          float = 72.0
 
     # Threshold adjustment (model base threshold is used as starting point)
-    base_long_threshold:   float = 0.58   # overridden by model.long_threshold at runtime
+    base_long_threshold:   float = 0.52   # overridden by model.long_threshold at runtime
 
     # ATR-based stop / take-profit
     stop_atr_mult:         float = 1.7
