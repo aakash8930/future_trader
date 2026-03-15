@@ -10,8 +10,15 @@ from features.technicals import compute_core_features
 
 class VectorBacktestEngine:
     """
-    Ultra-fast vectorized backtest (signal-level).
-    No execution latency, no trailing logic.
+        Ultra-fast vectorized backtest (signal-level, approximate).
+        This engine is intentionally conservative and not the source of truth.
+        Use historical simulator / shadow mode for execution-grade validation.
+
+        Assumptions:
+            - One-bar signal delay (enter on next bar)
+            - Turnover-based cost model (fees + slippage)
+            - No intrabar stop/TP sequencing
+
     Designed for:
       - strategy validation
       - threshold tuning
@@ -25,12 +32,14 @@ class VectorBacktestEngine:
         model_path: str,
         scaler_path: str,
         lookback: int = 300,
-        fee_pct: float = 0.0004,  # binance taker
+        fee_pct: float = 0.0012,
+        slippage_pct: float = 0.0010,
     ):
         self.symbol = symbol
         self.timeframe = timeframe
         self.lookback = lookback
         self.fee_pct = fee_pct
+        self.slippage_pct = slippage_pct
 
         self.data = MarketDataFetcher()
         self.model = DirectionModel(model_path, scaler_path)
@@ -49,22 +58,27 @@ class VectorBacktestEngine:
         df["prob_up"] = probs
 
         # ---- Signals ----
-        long_th = self.model.long_threshold - 0.03
+        long_th = max(0.45, self.model.long_threshold)
 
         df["signal"] = 0
         df.loc[
             (df["prob_up"] >= long_th)
-            & (df["atr_pct"] > 0.0012)
-            & (df["adx"] >= 8),
+            & (df["atr_pct"] > 0.0015)
+            & (df["adx"] >= 15)
+            & (df["rsi"] >= 48)
+            & (df["rsi"] <= 72),
             "signal",
         ] = 1
 
         # ---- Returns ----
         df["ret"] = df["close"].pct_change().shift(-1)
-        df["strategy_ret"] = df["signal"] * df["ret"]
+        df["position"] = df["signal"].shift(1).fillna(0)
+        df["strategy_ret"] = df["position"] * df["ret"]
 
-        # ---- Fees ----
-        df["fees"] = df["signal"].abs() * self.fee_pct
+        # ---- Fees + slippage (charged on position changes) ----
+        turn = df["position"].diff().abs().fillna(df["position"].abs())
+        per_side_cost = self.fee_pct + self.slippage_pct
+        df["fees"] = turn * per_side_cost
         df["net_ret"] = df["strategy_ret"] - df["fees"]
 
         # ---- Equity ----

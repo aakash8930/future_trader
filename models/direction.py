@@ -43,11 +43,17 @@ class DirectionModel:
         self.feature_columns = [
             "ema_fast",
             "ema_slow",
+            "ema_spread",
+            "dist_ema200",
+            "ema_fast_slope",
             "rsi",
+            "rsi_delta",
             "ret",
             "vol",
+            "volume_zscore",
             "atr_pct",
             "adx",
+            "breakout_strength",
         ]
 
         self.metadata: dict = {}
@@ -65,7 +71,7 @@ class DirectionModel:
         self.scaler = joblib.load(scaler_path)
 
         opt_th = self.metadata.get("optimized_long_threshold")
-        if opt_th:
+        if opt_th is not None:
             self.long_threshold = float(opt_th)
             self.short_threshold = 1.0 - self.long_threshold
         else:

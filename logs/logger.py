@@ -2,26 +2,50 @@
 
 import os
 import psycopg2
+from psycopg2 import InterfaceError, OperationalError
 from datetime import datetime, timezone
 
 
 class TradeLogger:
 
     def __init__(self):
-        database_url = os.getenv("DATABASE_PUBLIC_URL") or os.getenv("DATABASE_URL")
-        if not database_url:
+        self.database_url = os.getenv("DATABASE_PUBLIC_URL") or os.getenv("DATABASE_URL")
+        if not self.database_url:
             print("[LOGGER] No DATABASE_URL set — trade logging disabled.")
             self.conn = None
             return
 
+        self.conn = None
+        self._connect()
+
+    # ------------------------------------------------------------------
+    def _connect(self):
         try:
-            self.conn = psycopg2.connect(database_url)
+            self.conn = psycopg2.connect(self.database_url)
             self.conn.autocommit = True
             self._ensure_schema()
             print("[LOGGER] PostgreSQL connected and schema ready.")
         except Exception as exc:
             print(f"[LOGGER] Database connection failed — trade logging disabled. Error: {exc}")
             self.conn = None
+
+    # ------------------------------------------------------------------
+    def _ensure_connection(self) -> bool:
+        if self.conn is None:
+            self._connect()
+            return self.conn is not None
+
+        try:
+            if self.conn.closed != 0:
+                self._connect()
+                return self.conn is not None
+
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT 1;")
+            return True
+        except Exception:
+            self._connect()
+            return self.conn is not None
 
     # ------------------------------------------------------------------
     def _ensure_schema(self):
@@ -99,8 +123,19 @@ class TradeLogger:
         exit_reason: str          = "",
         add_count:   int          = 0,
     ):
-        if self.conn is None:
+        if not self._ensure_connection():
             return
+
+        payload = (
+            datetime.now(timezone.utc),
+            symbol, side,
+            entry_price, avg_entry if avg_entry is not None else entry_price,
+            exit_price, qty,
+            pnl, balance, prob_up, threshold,
+            atr, atr_pct, adx, regime,
+            stop_loss, take_profit, exit_reason, add_count,
+        )
+
         try:
             with self.conn.cursor() as cur:
                 cur.execute(
@@ -114,15 +149,28 @@ class TradeLogger:
                     VALUES
                         (%s,%s,%s, %s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s,%s)
                     """,
-                    (
-                        datetime.now(timezone.utc),
-                        symbol, side,
-                        entry_price, avg_entry if avg_entry is not None else entry_price,
-                        exit_price, qty,
-                        pnl, balance, prob_up, threshold,
-                        atr, atr_pct, adx, regime,
-                        stop_loss, take_profit, exit_reason, add_count,
-                    ),
+                    payload,
                 )
+        except (OperationalError, InterfaceError) as exc:
+            print(f"[LOGGER WARN] Connection dropped while writing trade: {exc}")
+            if not self._ensure_connection():
+                return
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO trades
+                            (timestamp, symbol, side,
+                             entry_price, avg_entry, exit_price, qty,
+                             pnl, balance, prob, threshold,
+                             atr, atr_pct, adx, regime,
+                             stop_loss, take_profit, exit_reason, add_count)
+                        VALUES
+                            (%s,%s,%s, %s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s,%s)
+                        """,
+                        payload,
+                    )
+            except Exception as retry_exc:
+                print(f"[LOGGER ERROR] Retry failed to write trade: {retry_exc}")
         except Exception as exc:
             print(f"[LOGGER ERROR] Failed to write trade: {exc}")

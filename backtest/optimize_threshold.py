@@ -29,30 +29,40 @@ def optimize_long_threshold(
     for th in np.arange(0.48, 0.61, 0.01):
         mask = (
             (df["prob_up"] >= th)
-            & (df["atr_pct"] > 0.0012)
-            & (df["adx"] >= 8)
+            & (df["atr_pct"] > 0.0015)
+            & (df["adx"] >= 15)
+            & (df["rsi"] >= 48)
+            & (df["rsi"] <= 72)
         )
 
-        trades = df[mask].copy()
-        if len(trades) < 50:
+        position = mask.astype(int).shift(1).fillna(0)
+        if int(position.sum()) < 50:
             continue
 
-        trades["ret"] = trades["close"].pct_change().shift(-1)
-        trades["net_ret"] = trades["ret"] - bt.fee_pct
+        ret = df["close"].pct_change().shift(-1).fillna(0.0)
+        turn = position.diff().abs().fillna(position.abs())
+        per_side_cost = bt.fee_pct + bt.slippage_pct
+        net_ret = position * ret - turn * per_side_cost
 
-        expectancy = trades["net_ret"].mean()
-        win_rate = (trades["net_ret"] > 0).mean()
+        active = position > 0
+        if int(active.sum()) < 50:
+            continue
 
-        equity = (1 + trades["net_ret"]).cumprod()
+        trade_rets = net_ret[active]
+
+        expectancy = float(trade_rets.mean())
+        win_rate = float((trade_rets > 0).mean())
+
+        equity = (1 + net_ret).cumprod()
         peak = equity.cummax()
         drawdown = (peak - equity) / peak
-        max_dd = drawdown.max()
+        max_dd = float(drawdown.max())
 
         score = expectancy / (max_dd + 1e-6)
 
         results.append({
             "threshold": round(th, 3),
-            "trades": len(trades),
+            "trades": int(active.sum()),
             "expectancy": expectancy,
             "win_rate": win_rate,
             "max_dd": max_dd,

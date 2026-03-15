@@ -19,6 +19,8 @@ class StrategyConfig:
     min_prob:              float = 0.58
     min_adx:               float = 15.0
     min_atr_pct:           float = 0.001
+    rsi_long_min:          float = 48.0
+    rsi_long_max:          float = 72.0
 
     # Threshold adjustment (model base threshold is used as starting point)
     base_long_threshold:   float = 0.58   # overridden by model.long_threshold at runtime
@@ -26,6 +28,11 @@ class StrategyConfig:
     # ATR-based stop / take-profit
     stop_atr_mult:         float = 2.0
     take_atr_mult:         float = 3.0
+
+    # Execution cost / edge filter (round-trip estimate)
+    fee_pct_per_side:      float = 0.0010
+    slippage_pct_per_side: float = 0.0008
+    min_expected_edge:     float = 0.0002
 
     # Trailing stop
     trail_activate_atr_mult: float = 1.0   # activate trail when move >= 1 ATR
@@ -60,6 +67,7 @@ class SignalDecision:
     price:      float
     stop_loss:  float
     take_profit: float
+    expected_edge: float
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +96,7 @@ class StrategyEngine:
             side=None, prob=0.0, threshold=0.0, reason="",
             adx=0.0, atr=0.0, atr_pct=0.0, regime=regime,
             ema_fast=0.0, ema_slow=0.0, price=0.0,
-            stop_loss=0.0, take_profit=0.0,
+            stop_loss=0.0, take_profit=0.0, expected_edge=0.0,
         )
 
         if len(df) < 5:
@@ -103,11 +111,12 @@ class StrategyEngine:
         atr      = float(row["atr"])
         adx      = float(row["adx"])
         atr_pct  = float(row["atr_pct"])
+        rsi      = float(row["rsi"])
 
         prob_up = self.model.predict_proba(df)
 
         # Use model's optimised threshold as the base; fall back to config.
-        long_th = getattr(self.model, "long_threshold", self.cfg.min_prob)
+        long_th = getattr(self.model, "long_threshold", self.cfg.base_long_threshold)
 
         # Slight regime adjustments (keep modest — avoid over-fitting).
         if adx >= 35:
@@ -121,7 +130,7 @@ class StrategyEngine:
             side=None, prob=prob_up, threshold=long_th, reason="",
             adx=adx, atr=atr, atr_pct=atr_pct, regime=regime,
             ema_fast=ema_fast, ema_slow=ema_slow, price=price,
-            stop_loss=stop_loss, take_profit=take_profit,
+            stop_loss=stop_loss, take_profit=take_profit, expected_edge=0.0,
         )
 
         # ---- Filters (order: fastest to cheapest to eliminate) ----
@@ -131,6 +140,13 @@ class StrategyEngine:
 
         if atr_pct < self.cfg.min_atr_pct:
             base.reason = f"atr_pct_low({atr_pct:.4f}<{self.cfg.min_atr_pct})"
+            return base
+
+        if not (self.cfg.rsi_long_min <= rsi <= self.cfg.rsi_long_max):
+            base.reason = (
+                f"rsi_out_of_range({rsi:.1f} not in "
+                f"[{self.cfg.rsi_long_min:.1f},{self.cfg.rsi_long_max:.1f}])"
+            )
             return base
 
         # --- Trend condition: two valid paths for a long entry ---
@@ -159,10 +175,39 @@ class StrategyEngine:
             base.reason = f"prob_low({prob_up:.3f}<{long_th:.3f})"
             return base
 
+        expected_edge = self._expected_edge(
+            prob_up=prob_up,
+            entry_price=price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+        )
+        base.expected_edge = expected_edge
+        if expected_edge < self.cfg.min_expected_edge:
+            base.reason = (
+                f"edge_low({expected_edge:.5f}<{self.cfg.min_expected_edge:.5f})"
+            )
+            return base
+
         trend_label = "above_ema200" if above_ema200 else "momentum_override_below_ema200"
         base.side = "LONG"
         base.reason = f"ok:{trend_label}"
         return base
+
+    def _expected_edge(
+        self,
+        prob_up: float,
+        entry_price: float,
+        stop_loss: float,
+        take_profit: float,
+    ) -> float:
+        if entry_price <= 0:
+            return -1.0
+
+        tp_return = max((take_profit - entry_price) / entry_price, 0.0)
+        sl_return = max((entry_price - stop_loss) / entry_price, 0.0)
+        round_trip_cost = 2.0 * (self.cfg.fee_pct_per_side + self.cfg.slippage_pct_per_side)
+
+        return float(prob_up * tp_return - (1.0 - prob_up) * sl_return - round_trip_cost)
 
     # ------------------------------------------------------------------
     def position_size(

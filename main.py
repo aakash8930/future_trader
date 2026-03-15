@@ -4,6 +4,7 @@ from config.env_loader import load_env_file
 from config.live import LiveSettings
 from execution.runner import TradingRunner
 from execution.multi_runner import MultiSymbolTradingSystem
+from execution.strategy import StrategyConfig
 from logs.logger import TradeLogger
 
 
@@ -18,12 +19,21 @@ def main():
     # Create single shared logger
     logger = TradeLogger()
 
+    strategy_cfg = StrategyConfig(
+        cooldown_minutes=settings.cooldown_minutes,
+        rsi_long_min=settings.strategy_rsi_long_min,
+        rsi_long_max=settings.strategy_rsi_long_max,
+        fee_pct_per_side=settings.strategy_fee_pct_per_side,
+        slippage_pct_per_side=settings.strategy_slippage_pct_per_side,
+        min_expected_edge=settings.strategy_min_expected_edge,
+    )
+
     try:
         # -------------------------------
         # MULTI-SYMBOL AUTONOMOUS MODE
         # -------------------------------
         if len(settings.symbols) > 1:
-            system = MultiSymbolTradingSystem(settings, logger)
+            system = MultiSymbolTradingSystem(settings, logger, strategy_cfg)
             system.run_loop()
             return
 
@@ -40,6 +50,7 @@ def main():
             starting_balance_usdt=settings.starting_balance_usdt,
             cooldown_minutes=settings.cooldown_minutes,
             risk_per_trade=settings.risk_per_trade,
+            config=strategy_cfg,
             exchange_name=settings.exchange_name,
             exchange_fallbacks=settings.exchange_fallbacks,
             exchange_timeout_ms=settings.exchange_timeout_ms,

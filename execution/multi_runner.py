@@ -8,6 +8,7 @@ from execution.runner import TradingRunner
 from execution.universe_manager import UniverseManager
 from config.live import LiveSettings
 from logs.logger import TradeLogger
+from execution.strategy import StrategyConfig
 
 
 class MultiSymbolTradingSystem:
@@ -15,9 +16,15 @@ class MultiSymbolTradingSystem:
     Fully autonomous multi-symbol trading system.
     """
 
-    def __init__(self, settings: LiveSettings, logger: TradeLogger):
+    def __init__(
+        self,
+        settings: LiveSettings,
+        logger: TradeLogger | None = None,
+        strategy_config: StrategyConfig | None = None,
+    ):
         self.settings = settings
-        self.logger = logger
+        self.logger = logger if logger is not None else TradeLogger()
+        self.strategy_config = strategy_config
         self.runners: dict[str, TradingRunner] = {}
 
         self.universe = UniverseManager(
@@ -64,6 +71,7 @@ class MultiSymbolTradingSystem:
             starting_balance_usdt=self.settings.starting_balance_usdt,
             cooldown_minutes=self.settings.cooldown_minutes,
             risk_per_trade=self.settings.risk_per_trade,
+            config=self.strategy_config,
             exchange_name=self.settings.exchange_name,
             exchange_fallbacks=self.settings.exchange_fallbacks,
             exchange_timeout_ms=self.settings.exchange_timeout_ms,

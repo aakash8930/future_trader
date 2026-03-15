@@ -32,8 +32,9 @@ def _load_project_modules():
 TIMEFRAME = "15m"
 CANDLES = 50000
 
-HORIZON = 5               # volatility-aware horizon
-ATR_MULTIPLIER = 0.8      # ATR-based dynamic target
+HORIZON = 12
+STOP_ATR_MULT = 2.0
+TAKE_ATR_MULT = 3.0
 
 EPOCHS = 10
 BATCH_SIZE = 256
@@ -45,11 +46,17 @@ PURGE_BARS = 10           # leakage protection
 FEATURE_COLUMNS = [
     "ema_fast",
     "ema_slow",
+    "ema_spread",
+    "dist_ema200",
+    "ema_fast_slope",
     "rsi",
+    "rsi_delta",
     "ret",
     "vol",
+    "volume_zscore",
     "atr_pct",
     "adx",
+    "breakout_strength",
 ]
 
 SYMBOLS = [
@@ -85,6 +92,89 @@ class DirectionNet(torch.nn.Module):
         return self.net(x)
 
 
+def _build_triple_barrier_labels(
+    df,
+    horizon: int,
+    stop_atr_mult: float,
+    take_atr_mult: float,
+):
+    close = df["close"].to_numpy()
+    high = df["high"].to_numpy()
+    low = df["low"].to_numpy()
+    atr = df["atr"].to_numpy()
+
+    labels = np.zeros(len(df), dtype=np.int8)
+    valid = np.zeros(len(df), dtype=bool)
+
+    for i in range(0, len(df) - horizon):
+        entry = close[i]
+        atr_i = atr[i]
+        if not np.isfinite(entry) or not np.isfinite(atr_i) or atr_i <= 0:
+            continue
+
+        tp_level = entry + take_atr_mult * atr_i
+        sl_level = entry - stop_atr_mult * atr_i
+
+        future_high = high[i + 1 : i + horizon + 1]
+        future_low = low[i + 1 : i + horizon + 1]
+
+        label = 0
+        for high_j, low_j in zip(future_high, future_low):
+            tp_hit = high_j >= tp_level
+            sl_hit = low_j <= sl_level
+
+            # If both hit within a single bar, assume worst-case ordering.
+            if tp_hit and sl_hit:
+                label = 0
+                break
+            if tp_hit:
+                label = 1
+                break
+            if sl_hit:
+                label = 0
+                break
+
+        labels[i] = label
+        valid[i] = True
+
+    return labels, valid
+
+
+def _optimize_long_threshold(y_true: np.ndarray, y_prob: np.ndarray) -> tuple[float, dict]:
+    best_th = 0.55
+    best_score = -1e9
+    best_stats = {}
+
+    min_pred_trades = max(25, int(0.02 * len(y_true)))
+
+    for th in np.arange(0.45, 0.71, 0.01):
+        preds = (y_prob >= th).astype(int)
+        pred_count = int(preds.sum())
+        if pred_count < min_pred_trades:
+            continue
+
+        precision = float(precision_score(y_true, preds, zero_division=0))
+        recall = float(recall_score(y_true, preds, zero_division=0))
+        f1 = float(f1_score(y_true, preds, zero_division=0))
+        trade_rate = float(preds.mean())
+
+        # Precision-biased score with mild turnover penalty.
+        score = 0.70 * precision + 0.25 * f1 + 0.05 * recall - max(0.0, trade_rate - 0.35) * 0.10
+
+        if score > best_score:
+            best_score = score
+            best_th = float(th)
+            best_stats = {
+                "precision": precision,
+                "recall": recall,
+                "f1": f1,
+                "trade_rate": trade_rate,
+                "score": float(score),
+            }
+
+    return best_th, best_stats
+
+
 # =========================
 # TRAINING
 # =========================
@@ -98,14 +188,17 @@ def train_for_symbol(symbol: str):
     df = compute_core_features(df)
 
     # -------------------------
-    # ATR-based classification target
+    # Triple-barrier target:
+    # 1 if TP is hit before SL within horizon, else 0.
     # -------------------------
-    df["future_close"] = df["close"].shift(-HORIZON)
-    df["atr_future"] = df["atr"] * ATR_MULTIPLIER
-
-    df["target"] = (
-        (df["future_close"] - df["close"]) > df["atr_future"]
-    ).astype(int)
+    labels, valid = _build_triple_barrier_labels(
+        df,
+        horizon=HORIZON,
+        stop_atr_mult=STOP_ATR_MULT,
+        take_atr_mult=TAKE_ATR_MULT,
+    )
+    df["target"] = labels
+    df = df[valid].copy()
 
     df.dropna(inplace=True)
 
@@ -216,8 +309,10 @@ def train_for_symbol(symbol: str):
     with torch.no_grad():
         val_probs = model(X_val_tensor).numpy().flatten()
 
-    val_pred_labels = (val_probs >= 0.5).astype(int)
     y_val_labels = y_val.flatten().astype(int)
+
+    opt_long_th, th_stats = _optimize_long_threshold(y_val_labels, val_probs)
+    val_pred_labels = (val_probs >= opt_long_th).astype(int)
 
     metrics = {
         "val_accuracy": float(accuracy_score(y_val_labels, val_pred_labels)),
@@ -233,6 +328,11 @@ def train_for_symbol(symbol: str):
         f"Prec={metrics['val_precision']:.3f} "
         f"Rec={metrics['val_recall']:.3f} "
         f"F1={metrics['val_f1']:.3f}"
+    )
+    print(
+        f"Optimized long threshold={opt_long_th:.2f} | "
+        f"Prec={th_stats.get('precision', 0.0):.3f} "
+        f"TradeRate={th_stats.get('trade_rate', 0.0):.3f}"
     )
 
     # -------------------------
@@ -250,8 +350,11 @@ def train_for_symbol(symbol: str):
         "symbol": symbol,
         "feature_columns": FEATURE_COLUMNS,
         "horizon": HORIZON,
-        "atr_multiplier": ATR_MULTIPLIER,
+        "stop_atr_mult": STOP_ATR_MULT,
+        "take_atr_mult": TAKE_ATR_MULT,
         "timeframe": TIMEFRAME,
+        "optimized_long_threshold": float(opt_long_th),
+        "threshold_optimization": th_stats,
         "train_rows": int(len(X_train)),
         "val_rows": int(len(X_val)),
         "trained_at_utc": datetime.now(timezone.utc).isoformat(),
