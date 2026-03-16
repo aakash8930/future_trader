@@ -19,8 +19,8 @@ class StrategyConfig:
     min_prob:              float = 0.52
     min_adx:               float = 15.0
     min_atr_pct:           float = 0.001
-    rsi_long_min:          float = 48.0
-    rsi_long_max:          float = 72.0
+    rsi_long_min:          float = 40.0
+    rsi_long_max:          float = 75.0
 
     # Threshold adjustment (model base threshold is used as starting point)
     base_long_threshold:   float = 0.52   # overridden by model.long_threshold at runtime
