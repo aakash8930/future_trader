@@ -46,8 +46,8 @@ class LiveSettings:
 
     lookback: int = 300
 
-    strategy_rsi_long_min: float = 48.0
-    strategy_rsi_long_max: float = 72.0
+    strategy_rsi_long_min: float = 40.0
+    strategy_rsi_long_max: float = 75.0
     strategy_fee_pct_per_side: float = 0.0010
     strategy_slippage_pct_per_side: float = 0.0008
     strategy_min_expected_edge: float = 0.0002
@@ -86,8 +86,8 @@ class LiveSettings:
             min_model_val_precision=_env_float("MIN_MODEL_VAL_PRECISION", 0.10),
             min_model_val_recall=_env_float("MIN_MODEL_VAL_RECALL", 0.10),
             lookback=_env_int("LOOKBACK_BARS", 300),
-            strategy_rsi_long_min=_env_float("STRATEGY_RSI_LONG_MIN", 48.0),
-            strategy_rsi_long_max=_env_float("STRATEGY_RSI_LONG_MAX", 72.0),
+            strategy_rsi_long_min=_env_float("STRATEGY_RSI_LONG_MIN", 40.0),
+            strategy_rsi_long_max=_env_float("STRATEGY_RSI_LONG_MAX", 75.0),
             strategy_fee_pct_per_side=_env_float("STRATEGY_FEE_PCT_PER_SIDE", 0.0010),
             strategy_slippage_pct_per_side=_env_float("STRATEGY_SLIPPAGE_PCT_PER_SIDE", 0.0008),
             strategy_min_expected_edge=_env_float("STRATEGY_MIN_EXPECTED_EDGE", 0.0002),
