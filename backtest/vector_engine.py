@@ -35,6 +35,9 @@ class VectorBacktestEngine:
         lookback: int = 300,
         fee_pct: float = 0.0012,
         slippage_pct: float = 0.0010,
+        exchange_name: str = "binance",
+        exchange_fallbacks: list = None,
+        exchange_timeout_ms: int = 20000,
     ):
         self.symbol = symbol
         self.timeframe = timeframe
@@ -42,7 +45,11 @@ class VectorBacktestEngine:
         self.fee_pct = fee_pct
         self.slippage_pct = slippage_pct
 
-        self.data = MarketDataFetcher()
+        self.data = MarketDataFetcher(
+            exchange_name=exchange_name,
+            fallback_exchanges=exchange_fallbacks,
+            timeout_ms=exchange_timeout_ms,
+        )
         self.model = DirectionModel(model_path, scaler_path, metadata_path)
 
     def run(self, limit: int = 10_000) -> pd.DataFrame:

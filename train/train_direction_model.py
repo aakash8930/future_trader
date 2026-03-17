@@ -182,7 +182,16 @@ def train_for_symbol(symbol: str):
     MarketDataFetcher, compute_core_features, MODEL_NAME, MODEL_VERSION = _load_project_modules()
     print(f"\n🚀 Training {MODEL_NAME} {MODEL_VERSION} for {symbol}")
 
-    fetcher = MarketDataFetcher()
+    exchange_name = os.getenv("EXCHANGE_NAME", "binance")
+    raw_fallbacks = os.getenv("EXCHANGE_FALLBACKS", "bybit,kraken,okx")
+    fallbacks = [s.strip().lower() for s in raw_fallbacks.split(",") if s.strip()]
+    timeout_ms = int(os.getenv("EXCHANGE_TIMEOUT_MS", "20000"))
+
+    fetcher = MarketDataFetcher(
+        exchange_name=exchange_name,
+        fallback_exchanges=fallbacks,
+        timeout_ms=timeout_ms,
+    )
     df = fetcher.fetch_ohlcv(symbol, TIMEFRAME, limit=CANDLES)
 
     df = compute_core_features(df)
