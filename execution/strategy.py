@@ -234,3 +234,4 @@ class StrategyEngine:
         atr_pct  = df.iloc[-1]["atr_pct"]
         adx      = df.iloc[-1]["adx"]
         return float(prob_up * atr_pct * adx)
+# rebuild2
