@@ -72,6 +72,12 @@ SYMBOLS = [
     "DOGE/USDT",
 ]
 
+# allow temporary exclusion of symbols via environment (same variable as live)
+raw_exclude = os.getenv("EXCLUDED_SYMBOLS", "")
+if raw_exclude:
+    excluded = {s.strip().upper() for s in raw_exclude.split(",") if s.strip()}
+    SYMBOLS = [s for s in SYMBOLS if s not in excluded]
+
 
 # =========================
 # MODEL
