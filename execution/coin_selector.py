@@ -1,11 +1,9 @@
-
 # execution/coin_selector.py
 
 import os
 import ta
 import numpy as np
 from data.fetcher import MarketDataFetcher
-
 
 def _has_trained_model(symbol: str) -> bool:
     """Return True only if both model.pt and scaler.save exist for this symbol."""
@@ -104,6 +102,7 @@ class CoinSelector:
             volume_ratio = last_volume / last_vol_ma
             trend_strength = min(adx.iloc[-1], 40)
 
+            # SAFETY CHECKS: Keep existing filters
             if atr_pct < self.min_atr_pct:
                 print(f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: atr_pct too low ({atr_pct:.4f})")
                 return None
@@ -112,7 +111,47 @@ class CoinSelector:
                 print(f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: volume_ratio too low ({volume_ratio:.2f})")
                 return None
 
-            score = atr_pct * volume_ratio * trend_strength
+            # ========== NEW SCORING LOGIC ==========  
+
+            # 1. Get model probability
+            prob_up = 0.5
+            try:
+                from models.direction import DirectionModel
+                model_path = os.path.join("models", symbol.replace("/", "_"), "model.pt")
+                scaler_path = os.path.join("models", symbol.replace("/", "_"), "scaler.save")
+                model = DirectionModel(model_path, scaler_path)
+                prob_up = model.predict_proba(df)
+            except Exception as e:
+                prob_up = 0.5
+
+            # 2. Calculate trend bonuses
+            price = df["close"].iloc[-1]
+            ema_fast = ta.trend.EMAIndicator(df["close"], window=9).ema_indicator().iloc[-1]
+            ema_slow = ta.trend.EMAIndicator(df["close"], window=21).ema_indicator().iloc[-1]
+            ema200 = ta.trend.EMAIndicator(df["close"], window=200).ema_indicator().iloc[-1]
+
+            above_ema200 = price > ema200
+            bullish_cross = ema_fast > ema_slow
+
+            trend_bonus = 0.0
+            if above_ema200 and bullish_cross:
+                trend_bonus = 1.0
+            elif above_ema200:
+                trend_bonus = 0.5
+
+            # 3. Normalize indicators to [0, 1]
+            adx_score = min(trend_strength / 40.0, 1.0)
+            atr_score = min(atr_pct / 0.01, 1.0)
+            vol_score = min(volume_ratio / 2.0, 1.0)
+
+            # 4. Weighted composite score
+            score = (
+                prob_up * 0.4
+                + adx_score * 0.2
+                + atr_score * 0.15
+                + vol_score * 0.15
+                + trend_bonus * 0.1
+            )
 
             return float(score)
 
