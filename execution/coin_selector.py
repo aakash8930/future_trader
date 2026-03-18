@@ -1,6 +1,5 @@
 import os
 import numpy as np
-import ta
 
 from data.fetcher import MarketDataFetcher
 from features.technicals import compute_core_features
@@ -19,10 +18,10 @@ class CoinSelector:
     """
     Scores symbols for live trading.
 
-    Important design:
-    - Uses closed candles only
-    - Avoids rejecting a symbol only because the latest exchange volume is weird
-    - Uses soft penalties for weak volume instead of over-filtering everything
+    Design goals:
+    - Uses only closed candles
+    - Fetches enough history for EMA200 + derived indicators
+    - Uses soft liquidity penalties instead of over-rejecting symbols
     """
 
     DEFAULT_SYMBOLS = [
@@ -61,6 +60,7 @@ class CoinSelector:
     def _model_probability(self, symbol: str, df) -> float:
         try:
             from models.direction import DirectionModel
+
             model = DirectionModel.for_symbol(symbol)
             prob = float(model.predict_proba(df))
             if 0.0 <= prob <= 1.0:
@@ -71,19 +71,21 @@ class CoinSelector:
 
     def _score_symbol(self, symbol: str) -> float | None:
         try:
+            raw_fetch_limit = max(self.lookback + 80, 320)
+
             raw_df = self.fetcher.fetch_ohlcv(
                 symbol,
                 self.timeframe,
-                limit=self.lookback + 5,
+                limit=raw_fetch_limit,
             )
 
             if raw_df is None:
                 return None
 
-            if len(raw_df) < 220:
+            if len(raw_df) < 260:
                 print(
                     f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
-                    f"insufficient data ({len(raw_df)} rows)"
+                    f"insufficient raw data ({len(raw_df)} rows)"
                 )
                 return None
 
@@ -94,7 +96,7 @@ class CoinSelector:
             if df.empty or len(df) < 50:
                 print(
                     f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
-                    f"feature window too small"
+                    f"feature window too small ({len(df)} rows)"
                 )
                 return None
 
@@ -106,8 +108,7 @@ class CoinSelector:
             ema_slow = float(last["ema_slow"])
             ema200 = float(last["ema200"])
 
-            # Robust volume ratio:
-            # compare recent median volume vs rolling median volume.
+            # Clean volume data
             vol_series = df["volume"].replace([np.inf, -np.inf], np.nan).dropna()
             if len(vol_series) < 30:
                 print(
@@ -116,8 +117,18 @@ class CoinSelector:
                 )
                 return None
 
-            recent_vol = float(vol_series.tail(3).median())
-            baseline_vol = float(vol_series.tail(20).median())
+            recent_window = vol_series.tail(3)
+            baseline_window = vol_series.iloc[-23:-3]
+
+            if len(baseline_window) < 10:
+                print(
+                    f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
+                    f"baseline volume window too small"
+                )
+                return None
+
+            recent_vol = float(recent_window.median())
+            baseline_vol = float(baseline_window.median())
 
             if recent_vol <= 0 or baseline_vol <= 0:
                 print(
@@ -151,8 +162,7 @@ class CoinSelector:
             adx_score = min(max(adx, 0.0) / 40.0, 1.0)
             atr_score = min(max(atr_pct, 0.0) / 0.01, 1.0)
 
-            # Soft volume handling:
-            # do not reject unless totally broken, only penalize weak liquidity.
+            # Soft volume handling
             volume_score = min(max(volume_ratio, 0.0) / 1.5, 1.0)
             if volume_ratio < self.soft_min_volume_ratio:
                 volume_score *= 0.35
@@ -186,7 +196,9 @@ class CoinSelector:
         supported = [s for s in configured_symbols if self.fetcher.is_symbol_supported(s)]
         unsupported = [s for s in configured_symbols if s not in supported]
         if unsupported:
-            print(f"[CoinSelector] Unsupported on {self.fetcher.exchange_name}: {unsupported}")
+            print(
+                f"[CoinSelector] Unsupported on {self.fetcher.exchange_name}: {unsupported}"
+            )
 
         eligible = [s for s in supported if _has_trained_model(s)]
         skipped = [s for s in supported if s not in eligible]
