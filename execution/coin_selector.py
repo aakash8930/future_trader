@@ -1,14 +1,12 @@
-# execution/coin_selector.py
-
 import os
-import ta
 import numpy as np
+import ta
 
 from data.fetcher import MarketDataFetcher
+from features.technicals import compute_core_features
 
 
 def _has_trained_model(symbol: str) -> bool:
-    """Return True only if model, scaler, and metadata exist for this symbol."""
     folder = os.path.join("models", symbol.replace("/", "_"))
     return (
         os.path.exists(os.path.join(folder, "model.pt"))
@@ -19,8 +17,12 @@ def _has_trained_model(symbol: str) -> bool:
 
 class CoinSelector:
     """
-    Selects the best trading symbols based on model confidence,
-    volatility, volume, and trend strength.
+    Scores symbols for live trading.
+
+    Important design:
+    - Uses closed candles only
+    - Avoids rejecting a symbol only because the latest exchange volume is weird
+    - Uses soft penalties for weak volume instead of over-filtering everything
     """
 
     DEFAULT_SYMBOLS = [
@@ -36,77 +38,96 @@ class CoinSelector:
     def __init__(
         self,
         timeframe: str = "15m",
-        lookback: int = 200,
+        lookback: int = 240,
         top_k: int = 4,
         min_atr_pct: float = 0.001,
-        min_volume_ratio: float = 0.7,
+        soft_min_volume_ratio: float = 0.15,
         exchange_name: str = "binance",
-        exchange_fallbacks: list[str] = None,
+        exchange_fallbacks: list[str] | None = None,
         exchange_timeout_ms: int = 20000,
     ):
         self.timeframe = timeframe
         self.lookback = lookback
         self.top_k = top_k
         self.min_atr_pct = min_atr_pct
-        self.min_volume_ratio = min_volume_ratio
+        self.soft_min_volume_ratio = soft_min_volume_ratio
+
         self.fetcher = MarketDataFetcher(
             exchange_name=exchange_name,
             fallback_exchanges=exchange_fallbacks,
             timeout_ms=exchange_timeout_ms,
         )
 
+    def _model_probability(self, symbol: str, df) -> float:
+        try:
+            from models.direction import DirectionModel
+            model = DirectionModel.for_symbol(symbol)
+            prob = float(model.predict_proba(df))
+            if 0.0 <= prob <= 1.0:
+                return prob
+        except Exception:
+            pass
+        return 0.5
+
     def _score_symbol(self, symbol: str) -> float | None:
         try:
-            df = self.fetcher.fetch_ohlcv(
+            raw_df = self.fetcher.fetch_ohlcv(
                 symbol,
                 self.timeframe,
-                limit=self.lookback,
+                limit=self.lookback + 5,
             )
 
-            # Symbol not supported on this exchange
-            if df is None:
+            if raw_df is None:
                 return None
 
-            if len(df) < 120:
+            if len(raw_df) < 220:
                 print(
                     f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
-                    f"insufficient data ({len(df)} rows)"
+                    f"insufficient data ({len(raw_df)} rows)"
                 )
                 return None
 
-            atr = ta.volatility.AverageTrueRange(
-                df["high"], df["low"], df["close"], window=14
-            ).average_true_range()
+            # Use only confirmed/closed candles.
+            df = raw_df.iloc[:-1].copy()
+            df = compute_core_features(df)
 
-            adx = ta.trend.ADXIndicator(
-                df["high"], df["low"], df["close"], window=14
-            ).adx()
-
-            vol_ma = df["volume"].rolling(20).mean()
-
-            # Use most recent closed candle
-            last_volume = df["volume"].iloc[-1]
-            last_vol_ma = vol_ma.iloc[-1]
-
-            if (
-                last_volume <= 0
-                or last_vol_ma <= 0
-                or not np.isfinite(last_volume)
-                or not np.isfinite(last_vol_ma)
-            ):
+            if df.empty or len(df) < 50:
                 print(
                     f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
-                    f"invalid volume data (last={last_volume:.2f}, ma={last_vol_ma:.2f})"
+                    f"feature window too small"
                 )
                 return None
 
-            last_close = float(df["close"].iloc[-1])
-            atr_pct = float(atr.iloc[-1] / last_close)
-            volume_ratio = float(last_volume / last_vol_ma)
-            adx_value = float(adx.iloc[-1])
-            trend_strength = min(adx_value, 40.0)
+            last = df.iloc[-1]
+            price = float(last["close"])
+            adx = float(last["adx"])
+            atr_pct = float(last["atr_pct"])
+            ema_fast = float(last["ema_fast"])
+            ema_slow = float(last["ema_slow"])
+            ema200 = float(last["ema200"])
 
-            # Keep existing safety filters
+            # Robust volume ratio:
+            # compare recent median volume vs rolling median volume.
+            vol_series = df["volume"].replace([np.inf, -np.inf], np.nan).dropna()
+            if len(vol_series) < 30:
+                print(
+                    f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
+                    f"not enough clean volume data"
+                )
+                return None
+
+            recent_vol = float(vol_series.tail(3).median())
+            baseline_vol = float(vol_series.tail(20).median())
+
+            if recent_vol <= 0 or baseline_vol <= 0:
+                print(
+                    f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
+                    f"invalid volume data (recent={recent_vol:.2f}, base={baseline_vol:.2f})"
+                )
+                return None
+
+            volume_ratio = recent_vol / baseline_vol
+
             if atr_pct < self.min_atr_pct:
                 print(
                     f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
@@ -114,39 +135,7 @@ class CoinSelector:
                 )
                 return None
 
-            if volume_ratio < self.min_volume_ratio:
-                print(
-                    f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
-                    f"volume_ratio too low ({volume_ratio:.2f})"
-                )
-                return None
-
-            # -------- Model probability --------
-            prob_up = 0.5
-            try:
-                from models.direction import DirectionModel
-
-                model_dir = os.path.join("models", symbol.replace("/", "_"))
-                model_path = os.path.join(model_dir, "model.pt")
-                scaler_path = os.path.join(model_dir, "scaler.save")
-                metadata_path = os.path.join(model_dir, "metadata.json")
-
-                model = DirectionModel(model_path, scaler_path, metadata_path)
-                prob_up = float(model.predict_proba(df))
-            except Exception:
-                prob_up = 0.5
-
-            # -------- Trend bonus --------
-            price = float(df["close"].iloc[-1])
-            ema_fast = float(
-                ta.trend.EMAIndicator(df["close"], window=9).ema_indicator().iloc[-1]
-            )
-            ema_slow = float(
-                ta.trend.EMAIndicator(df["close"], window=21).ema_indicator().iloc[-1]
-            )
-            ema200 = float(
-                ta.trend.EMAIndicator(df["close"], window=200).ema_indicator().iloc[-1]
-            )
+            prob_up = self._model_probability(symbol, df)
 
             above_ema200 = price > ema200
             bullish_cross = ema_fast > ema_slow
@@ -156,19 +145,30 @@ class CoinSelector:
                 trend_bonus = 1.0
             elif above_ema200:
                 trend_bonus = 0.5
+            elif bullish_cross:
+                trend_bonus = 0.25
 
-            # -------- Normalized scores --------
-            adx_score = min(trend_strength / 40.0, 1.0)
-            atr_score = min(atr_pct / 0.01, 1.0)
-            vol_score = min(volume_ratio / 2.0, 1.0)
+            adx_score = min(max(adx, 0.0) / 40.0, 1.0)
+            atr_score = min(max(atr_pct, 0.0) / 0.01, 1.0)
 
-            # -------- Composite score --------
+            # Soft volume handling:
+            # do not reject unless totally broken, only penalize weak liquidity.
+            volume_score = min(max(volume_ratio, 0.0) / 1.5, 1.0)
+            if volume_ratio < self.soft_min_volume_ratio:
+                volume_score *= 0.35
+
             score = (
                 prob_up * 0.40
                 + adx_score * 0.20
-                + atr_score * 0.15
-                + vol_score * 0.15
+                + atr_score * 0.20
+                + volume_score * 0.10
                 + trend_bonus * 0.10
+            )
+
+            print(
+                f"[CoinSelector] {symbol} | "
+                f"score={score:.3f} prob={prob_up:.3f} adx={adx:.1f} "
+                f"atr_pct={atr_pct:.4f} vol_ratio={volume_ratio:.2f}"
             )
 
             return float(score)
@@ -181,23 +181,19 @@ class CoinSelector:
             return None
 
     def select(self, symbols: list[str]) -> list[str]:
-        configured_symbols = symbols
-        if not symbols:
-            symbols = self.DEFAULT_SYMBOLS
+        configured_symbols = symbols[:] if symbols else self.DEFAULT_SYMBOLS[:]
 
-        supported = [s for s in symbols if self.fetcher.is_symbol_supported(s)]
-        unsupported = [s for s in symbols if s not in supported]
+        supported = [s for s in configured_symbols if self.fetcher.is_symbol_supported(s)]
+        unsupported = [s for s in configured_symbols if s not in supported]
         if unsupported:
-            print(
-                f"[CoinSelector] Unsupported on {self.fetcher.exchange_name}: {unsupported}"
-            )
+            print(f"[CoinSelector] Unsupported on {self.fetcher.exchange_name}: {unsupported}")
 
         eligible = [s for s in supported if _has_trained_model(s)]
         skipped = [s for s in supported if s not in eligible]
         if skipped:
             print(f"[CoinSelector] Skipped (no model): {skipped}")
 
-        scores = {}
+        scores: dict[str, float] = {}
 
         for symbol in eligible:
             score = self._score_symbol(symbol)
@@ -207,18 +203,8 @@ class CoinSelector:
         ranked = sorted(scores, key=scores.get, reverse=True)
 
         if not ranked:
-            if configured_symbols:
-                print("⚠️ CoinSelector empty → fallback to configured symbols with trained models")
-                fallback = [s for s in configured_symbols if _has_trained_model(s)]
-            else:
-                print("⚠️ CoinSelector empty → fallback to default symbols with trained models")
-                fallback = [s for s in self.DEFAULT_SYMBOLS if _has_trained_model(s)]
+            print("⚠️ CoinSelector empty → fallback to configured symbols with trained models")
+            fallback = [s for s in configured_symbols if _has_trained_model(s)]
+            return fallback[: self.top_k]
 
-            return (
-                fallback[: self.top_k]
-                or configured_symbols[: self.top_k]
-                or self.DEFAULT_SYMBOLS[: self.top_k]
-            )
-
-        selected = ranked[: self.top_k]
-        return selected
+        return ranked[: self.top_k]
