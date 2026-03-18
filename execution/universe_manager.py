@@ -76,10 +76,13 @@ class UniverseManager:
         self.last_refresh = now
         active_exchange = self._active_exchange_name()
 
-        if active_exchange == "binance":
-            ranked = self.selector.select(self.all_symbols)
+        # Always try selector first regardless of exchange
+        ranked = self.selector.select(self.all_symbols)
+        if ranked:
             self.active_symbols = ranked[: self.max_active]
         else:
+            # Fallback to configured symbols if selector returns empty
+            print(f"[Universe] selector returned empty on {active_exchange} → using configured symbols")
             self.active_symbols = self._select_configured_symbols_direct(active_exchange)
 
         print(f"🔄 Universe updated → {self.active_symbols}")
