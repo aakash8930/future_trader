@@ -1,6 +1,3 @@
-
-#data/fetcher.py
-
 import time
 import ccxt
 import pandas as pd
@@ -19,9 +16,7 @@ def _sanitize_error_msg(error: Exception) -> str:
     """
     msg = str(error)
 
-    # Detect HTML content
     if "<html" in msg.lower() or "<!doctype" in msg.lower() or "<body" in msg.lower():
-        # Check for common HTTP status codes in HTML responses
         if "403" in msg or "forbidden" in msg.lower():
             return "access blocked (HTTP 403)"
         if "451" in msg or "unavailable for legal reasons" in msg.lower():
@@ -32,7 +27,6 @@ def _sanitize_error_msg(error: Exception) -> str:
             return "blocked by CloudFront"
         return "blocked (HTML error page)"
 
-    # Check for specific HTTP codes
     if "451" in msg:
         return "geo-restricted (HTTP 451)"
     if "403" in msg:
@@ -40,7 +34,6 @@ def _sanitize_error_msg(error: Exception) -> str:
     if "503" in msg:
         return "service unavailable (HTTP 503)"
 
-    # Truncate very long messages
     if len(msg) > 150:
         return msg[:150] + "..."
 
@@ -53,29 +46,29 @@ class MarketDataFetcher:
     Supports multiple exchanges with automatic fallback on geo-restrictions.
     """
 
-    _exchange = None  # 🔑 singleton
-    _exchange_name = None  # Track which exchange is active
-    _supported_symbols = set()  # Cache of symbols supported by active exchange
+    _exchange = None
+    _exchange_name = None
+    _supported_symbols = set()
 
     def __init__(
         self,
         exchange_name: str = "binance",
-        fallback_exchanges: list[str] = None,
+        fallback_exchanges: list[str] | None = None,
         timeout_ms: int = 20000,
     ):
         if MarketDataFetcher._exchange is None:
             if fallback_exchanges is None:
                 fallback_exchanges = ["bybit", "kraken", "okx"]
 
-            MarketDataFetcher._exchange, MarketDataFetcher._exchange_name = (
-                self._init_exchange_with_fallback(
-                    exchange_name,
-                    fallback_exchanges,
-                    timeout_ms,
-                )
+            (
+                MarketDataFetcher._exchange,
+                MarketDataFetcher._exchange_name,
+            ) = self._init_exchange_with_fallback(
+                exchange_name,
+                fallback_exchanges,
+                timeout_ms,
             )
 
-            # Load supported symbols
             if MarketDataFetcher._exchange:
                 try:
                     markets = MarketDataFetcher._exchange.markets
@@ -95,24 +88,17 @@ class MarketDataFetcher:
         fallbacks: list[str],
         timeout_ms: int,
     ) -> tuple:
-        """
-        Initialize exchange with fallback support.
-        Returns (exchange_object, exchange_name) or raises RuntimeError.
-        """
         attempts = [primary_exchange] + fallbacks
         errors = {}
 
         for idx, exchange_name in enumerate(attempts):
             try:
-                # Show fallback message for non-primary exchanges
                 if idx > 0:
                     print(f"[FETCHER] trying fallback exchange: {exchange_name}")
                 else:
                     print(f"[FETCHER] attempting to connect to {exchange_name}...")
 
                 exchange = self._create_exchange(exchange_name, timeout_ms)
-
-                # Critical: load_markets() can fail with 451 or NetworkError
                 exchange.load_markets()
 
                 print(f"[FETCHER] ✓ using exchange: {exchange_name}")
@@ -138,7 +124,6 @@ class MarketDataFetcher:
                 errors[exchange_name] = f"unexpected error: {sanitized}"
                 print(f"[FETCHER] {exchange_name} unexpected error: {sanitized}")
 
-        # All exchanges failed - generate clean error message
         error_summary = "\n".join(f"  - {name}: {err}" for name, err in errors.items())
         raise RuntimeError(
             f"[FETCHER] All exchanges failed:\n{error_summary}\n\n"
@@ -147,10 +132,8 @@ class MarketDataFetcher:
         )
 
     def _create_exchange(self, exchange_name: str, timeout_ms: int):
-        """Create exchange instance dynamically from ccxt."""
         exchange_name = exchange_name.lower().strip()
 
-        # Map exchange names to ccxt classes
         exchange_classes = {
             "binance": ccxt.binance,
             "bybit": ccxt.bybit,
@@ -175,7 +158,6 @@ class MarketDataFetcher:
         })
 
     def is_symbol_supported(self, symbol: str) -> bool:
-        """Check if symbol is supported on the active exchange."""
         return symbol in self.supported_symbols
 
     def fetch_ohlcv(
@@ -185,11 +167,6 @@ class MarketDataFetcher:
         limit: int = 500,
         retries: int = 3,
     ) -> pd.DataFrame | None:
-        """
-        Fetch OHLCV data with retry logic.
-        Returns None if symbol is not supported on this exchange.
-        """
-        # Check symbol compatibility
         if not self.is_symbol_supported(symbol):
             print(f"[FETCHER] symbol {symbol} not supported on {self.exchange_name}, skipping")
             return None
@@ -210,9 +187,54 @@ class MarketDataFetcher:
                     columns=["time", "open", "high", "low", "close", "volume"],
                 )
 
-            except (RequestTimeout, NetworkError) as e:
+            except (RequestTimeout, NetworkError):
                 if attempt == retries:
                     raise
                 time.sleep(2 * attempt)
 
         raise RuntimeError("fetch_ohlcv failed after retries")
+
+    def fetch_last_price(
+        self,
+        symbol: str,
+        retries: int = 3,
+    ) -> float | None:
+        """
+        Fetch latest traded price for intraloop SL/TP checks.
+        Much faster and more realistic than waiting for the next candle close.
+        """
+        if not self.is_symbol_supported(symbol):
+            return None
+
+        for attempt in range(1, retries + 1):
+            try:
+                ticker = self.exchange.fetch_ticker(symbol)
+
+                last = ticker.get("last")
+                close = ticker.get("close")
+                bid = ticker.get("bid")
+                ask = ticker.get("ask")
+
+                price = last or close
+                if price is None and bid is not None and ask is not None:
+                    price = (float(bid) + float(ask)) / 2.0
+
+                if price is None:
+                    raise RuntimeError("ticker missing usable price")
+
+                price = float(price)
+                if price <= 0:
+                    raise RuntimeError("invalid ticker price")
+
+                return price
+
+            except (RequestTimeout, NetworkError):
+                if attempt == retries:
+                    return None
+                time.sleep(min(1.0 * attempt, 3.0))
+            except Exception:
+                if attempt == retries:
+                    return None
+                time.sleep(min(1.0 * attempt, 3.0))
+
+        return None
