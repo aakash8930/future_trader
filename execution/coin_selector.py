@@ -1,3 +1,5 @@
+# execution/coin_selector.py
+
 import os
 import numpy as np
 
@@ -22,6 +24,7 @@ class CoinSelector:
     - Uses only closed candles
     - Fetches enough history for EMA200 + derived indicators
     - Uses soft liquidity penalties instead of over-rejecting symbols
+    - Strongly prefers symbols that are closer to real StrategyEngine entry conditions
     """
 
     DEFAULT_SYMBOLS = [
@@ -41,6 +44,8 @@ class CoinSelector:
         top_k: int = 4,
         min_atr_pct: float = 0.001,
         soft_min_volume_ratio: float = 0.15,
+        rsi_long_min: float = 40.0,
+        rsi_long_max: float = 75.0,
         exchange_name: str = "binance",
         exchange_fallbacks: list[str] | None = None,
         exchange_timeout_ms: int = 20000,
@@ -50,6 +55,8 @@ class CoinSelector:
         self.top_k = top_k
         self.min_atr_pct = min_atr_pct
         self.soft_min_volume_ratio = soft_min_volume_ratio
+        self.rsi_long_min = rsi_long_min
+        self.rsi_long_max = rsi_long_max
 
         self.fetcher = MarketDataFetcher(
             exchange_name=exchange_name,
@@ -57,17 +64,30 @@ class CoinSelector:
             timeout_ms=exchange_timeout_ms,
         )
 
-    def _model_probability(self, symbol: str, df) -> float:
-        try:
-            from models.direction import DirectionModel
+        self._model_cache: dict[str, object] = {}
 
-            model = DirectionModel.for_symbol(symbol)
+    def _get_model(self, symbol: str):
+        if symbol in self._model_cache:
+            return self._model_cache[symbol]
+
+        from models.direction import DirectionModel
+
+        model = DirectionModel.for_symbol(symbol)
+        self._model_cache[symbol] = model
+        return model
+
+    def _model_probability_and_threshold(self, symbol: str, df) -> tuple[float, float]:
+        try:
+            model = self._get_model(symbol)
             prob = float(model.predict_proba(df))
-            if 0.0 <= prob <= 1.0:
-                return prob
+            long_th = float(getattr(model, "long_threshold", 0.50))
+
+            if not (0.0 <= prob <= 1.0):
+                prob = 0.5
+
+            return prob, long_th
         except Exception:
-            pass
-        return 0.5
+            return 0.5, 0.50
 
     def _score_symbol(self, symbol: str) -> float | None:
         try:
@@ -107,6 +127,7 @@ class CoinSelector:
             ema_fast = float(last["ema_fast"])
             ema_slow = float(last["ema_slow"])
             ema200 = float(last["ema200"])
+            rsi = float(last["rsi"])
 
             # Clean volume data
             vol_series = df["volume"].replace([np.inf, -np.inf], np.nan).dropna()
@@ -146,18 +167,12 @@ class CoinSelector:
                 )
                 return None
 
-            prob_up = self._model_probability(symbol, df)
+            prob_up, long_th = self._model_probability_and_threshold(symbol, df)
 
             above_ema200 = price > ema200
             bullish_cross = ema_fast > ema_slow
-
-            trend_bonus = 0.0
-            if above_ema200 and bullish_cross:
-                trend_bonus = 1.0
-            elif above_ema200:
-                trend_bonus = 0.5
-            elif bullish_cross:
-                trend_bonus = 0.25
+            rsi_ok = self.rsi_long_min <= rsi <= self.rsi_long_max
+            prob_ok = prob_up >= long_th
 
             adx_score = min(max(adx, 0.0) / 40.0, 1.0)
             atr_score = min(max(atr_pct, 0.0) / 0.01, 1.0)
@@ -167,18 +182,53 @@ class CoinSelector:
             if volume_ratio < self.soft_min_volume_ratio:
                 volume_score *= 0.35
 
+            # Entry-alignment scoring
+            structure_score = 0.0
+            if above_ema200:
+                structure_score += 0.45
+            if bullish_cross:
+                structure_score += 0.25
+            if rsi_ok:
+                structure_score += 0.15
+            if prob_ok:
+                structure_score += 0.15
+
+            # Penalties for conditions that runner frequently rejects
+            penalty = 0.0
+            reasons = []
+
+            if not above_ema200:
+                penalty += 0.18
+                reasons.append("below_ema200")
+
+            if not bullish_cross:
+                penalty += 0.14
+                reasons.append("bearish_cross")
+
+            if not rsi_ok:
+                penalty += 0.12
+                reasons.append("rsi_bad")
+
+            if not prob_ok:
+                penalty += 0.10
+                reasons.append("prob_low")
+
             score = (
-                prob_up * 0.40
-                + adx_score * 0.20
-                + atr_score * 0.20
+                prob_up * 0.25
+                + adx_score * 0.15
+                + atr_score * 0.15
                 + volume_score * 0.10
-                + trend_bonus * 0.10
+                + structure_score * 0.35
+                - penalty
             )
 
             print(
                 f"[CoinSelector] {symbol} | "
-                f"score={score:.3f} prob={prob_up:.3f} adx={adx:.1f} "
-                f"atr_pct={atr_pct:.4f} vol_ratio={volume_ratio:.2f}"
+                f"score={score:.3f} prob={prob_up:.3f}/{long_th:.3f} "
+                f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
+                f"vol_ratio={volume_ratio:.2f} "
+                f"above_ema200={above_ema200} bullish_cross={bullish_cross} "
+                f"reasons={reasons if reasons else ['ok']}"
             )
 
             return float(score)
