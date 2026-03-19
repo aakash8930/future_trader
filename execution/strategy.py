@@ -1,5 +1,3 @@
-# execution/strategy.py
-
 from dataclasses import dataclass, field
 from typing import Optional, List
 import pandas as pd
@@ -16,23 +14,23 @@ from risk.sizing import fixed_fractional_size
 class StrategyConfig:
     """Single source of truth for all strategy parameters."""
     # Signal filters
-    min_prob:              float = 0.50
-    min_adx:               float = 12.0
+    min_prob:              float = 0.47
+    min_adx:               float = 10.0
     min_atr_pct:           float = 0.0008
-    rsi_long_min:          float = 40.0
-    rsi_long_max:          float = 75.0
+    rsi_long_min:          float = 35.0
+    rsi_long_max:          float = 72.0
 
     # Threshold adjustment (model base threshold is used as starting point)
-    base_long_threshold:   float = 0.50
+    base_long_threshold:   float = 0.48
 
     # ATR-based stop / take-profit
-    stop_atr_mult:         float = 1.6
+    stop_atr_mult:         float = 1.7
     take_atr_mult:         float = 3.0
 
     # Execution cost / edge filter
     fee_pct_per_side:      float = 0.0010
     slippage_pct_per_side: float = 0.0008
-    min_expected_edge:     float = 0.00005
+    min_expected_edge:     float = -0.00020
 
     # Trailing stop
     trail_activate_atr_mult: float = 1.0
@@ -117,15 +115,18 @@ class StrategyEngine:
         atr_pct = float(row["atr_pct"])
         rsi = float(row["rsi"])
 
-        prob_up = self.model.predict_proba(df)
+        prob_up = float(self.model.predict_proba(df))
 
-        model_th = getattr(self.model, "long_threshold", self.cfg.base_long_threshold)
+        model_th = float(getattr(self.model, "long_threshold", self.cfg.base_long_threshold))
         long_th = min(model_th, self.cfg.base_long_threshold)
 
-        if adx >= 35:
+        # Adaptive easing in stronger trend
+        if adx >= 30:
             long_th -= 0.02
+        elif adx >= 20:
+            long_th -= 0.01
 
-        long_th = max(self.cfg.min_prob, min(long_th, 0.65))
+        long_th = max(self.cfg.min_prob, min(long_th, 0.62))
 
         stop_loss = price - atr * self.cfg.stop_atr_mult
         take_profit = price + atr * self.cfg.take_atr_mult
@@ -163,10 +164,14 @@ class StrategyEngine:
             return base
 
         above_ema200 = price > ema200
+        bullish_cross = ema_fast > ema_slow
+
+        # Allow a controlled override when momentum is improving even below EMA200
         momentum_override = (
-            ema_fast > ema_slow
-            and adx >= 25
-            and prob_up >= long_th + 0.02
+            bullish_cross
+            and adx >= 18
+            and prob_up >= max(self.cfg.min_prob, long_th - 0.01)
+            and rsi >= max(self.cfg.rsi_long_min, 38.0)
         )
 
         if not above_ema200 and not momentum_override:
@@ -176,12 +181,20 @@ class StrategyEngine:
             )
             return base
 
-        if above_ema200 and ema_fast <= ema_slow:
-            base.reason = (
-                f"ema_cross_bearish(fast={ema_fast:.4f}<=slow={ema_slow:.4f}, "
-                f"price={price:.4f}, ema200={ema200:.4f})"
+        if above_ema200 and not bullish_cross:
+            # allow strong-trend continuation if fast/slow are very close and model is confident
+            weak_bearish_cross = ema_fast > (ema_slow * 0.9985)
+            continuation_override = (
+                adx >= 22
+                and prob_up >= long_th + 0.01
+                and weak_bearish_cross
             )
-            return base
+            if not continuation_override:
+                base.reason = (
+                    f"ema_cross_bearish(fast={ema_fast:.4f}<=slow={ema_slow:.4f}, "
+                    f"price={price:.4f}, ema200={ema200:.4f})"
+                )
+                return base
 
         if prob_up < long_th:
             base.reason = (
