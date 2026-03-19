@@ -6,52 +6,36 @@ from models.direction import DirectionModel
 from risk.sizing import fixed_fractional_size
 
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
 @dataclass
 class StrategyConfig:
     """Single source of truth for all strategy parameters."""
-    # Signal filters
-    min_prob:              float = 0.47
+    min_prob:              float = 0.46
     min_adx:               float = 10.0
     min_atr_pct:           float = 0.0008
-    rsi_long_min:          float = 35.0
-    rsi_long_max:          float = 72.0
+    rsi_long_min:          float = 38.0
+    rsi_long_max:          float = 75.0
 
-    # Threshold adjustment (model base threshold is used as starting point)
-    base_long_threshold:   float = 0.48
+    base_long_threshold:   float = 0.47
 
-    # ATR-based stop / take-profit
     stop_atr_mult:         float = 1.7
     take_atr_mult:         float = 3.0
 
-    # Execution cost / edge filter
     fee_pct_per_side:      float = 0.0010
     slippage_pct_per_side: float = 0.0008
-    min_expected_edge:     float = -0.00020
+    min_expected_edge:     float = -0.00030
 
-    # Trailing stop
     trail_activate_atr_mult: float = 1.0
     trail_atr_mult:          float = 1.0
 
-    # Cooldown
-    cooldown_minutes:      int   = 30
+    cooldown_minutes:      int = 30
 
-    # Pyramiding
-    max_pyramid_adds:      int   = 0
+    max_pyramid_adds:      int = 0
     pyramid_trigger_pct:   float = 0.005
     pyramid_qty_scales:    List[float] = field(default_factory=lambda: [0.6, 0.4, 0.25])
 
 
-# ---------------------------------------------------------------------------
-# Signal Decision
-# ---------------------------------------------------------------------------
-
 @dataclass
 class SignalDecision:
-    """Full signal output returned by StrategyEngine.generate_signal()."""
     side:          Optional[str]
     prob:          float
     threshold:     float
@@ -67,10 +51,6 @@ class SignalDecision:
     take_profit:   float
     expected_edge: float
 
-
-# ---------------------------------------------------------------------------
-# Engine
-# ---------------------------------------------------------------------------
 
 class StrategyEngine:
     def __init__(
@@ -120,13 +100,12 @@ class StrategyEngine:
         model_th = float(getattr(self.model, "long_threshold", self.cfg.base_long_threshold))
         long_th = min(model_th, self.cfg.base_long_threshold)
 
-        # Adaptive easing in stronger trend
         if adx >= 30:
             long_th -= 0.02
         elif adx >= 20:
             long_th -= 0.01
 
-        long_th = max(self.cfg.min_prob, min(long_th, 0.62))
+        long_th = max(self.cfg.min_prob, min(long_th, 0.60))
 
         stop_loss = price - atr * self.cfg.stop_atr_mult
         take_profit = price + atr * self.cfg.take_atr_mult
@@ -165,13 +144,15 @@ class StrategyEngine:
 
         above_ema200 = price > ema200
         bullish_cross = ema_fast > ema_slow
+        ema_gap_pct = (price - ema200) / ema200 if ema200 > 0 else 0.0
 
-        # Allow a controlled override when momentum is improving even below EMA200
+        # Recovery / rebound allowance below EMA200 for shadow mode learning
         momentum_override = (
             bullish_cross
             and adx >= 18
-            and prob_up >= max(self.cfg.min_prob, long_th - 0.01)
-            and rsi >= max(self.cfg.rsi_long_min, 38.0)
+            and rsi >= 42
+            and prob_up >= long_th - 0.01
+            and ema_gap_pct >= -0.035
         )
 
         if not above_ema200 and not momentum_override:
@@ -181,13 +162,13 @@ class StrategyEngine:
             )
             return base
 
+        # Above EMA200 path: still prefer bullish cross, but allow near-cross continuation
         if above_ema200 and not bullish_cross:
-            # allow strong-trend continuation if fast/slow are very close and model is confident
-            weak_bearish_cross = ema_fast > (ema_slow * 0.9985)
+            near_cross = ema_fast >= ema_slow * 0.998
             continuation_override = (
-                adx >= 22
-                and prob_up >= long_th + 0.01
-                and weak_bearish_cross
+                near_cross
+                and adx >= 18
+                and prob_up >= long_th + 0.005
             )
             if not continuation_override:
                 base.reason = (
