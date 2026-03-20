@@ -17,15 +17,6 @@ def _has_trained_model(symbol: str) -> bool:
 
 
 class CoinSelector:
-    """
-    Scores symbols for live trading.
-
-    Design goals:
-    - Uses only closed candles
-    - Fetches enough history for EMA200 + derived indicators
-    - Uses soft liquidity penalties instead of over-rejecting symbols
-    - Strongly prefers symbols that are closer to real StrategyEngine entry conditions
-    """
 
     DEFAULT_SYMBOLS = [
         "BTC/USDT",
@@ -39,24 +30,17 @@ class CoinSelector:
 
     def __init__(
         self,
-        timeframe: str = "15m",
-        lookback: int = 240,
-        top_k: int = 4,
-        min_atr_pct: float = 0.001,
-        soft_min_volume_ratio: float = 0.15,
-        rsi_long_min: float = 40.0,
-        rsi_long_max: float = 75.0,
-        exchange_name: str = "binance",
-        exchange_fallbacks: list[str] | None = None,
-        exchange_timeout_ms: int = 20000,
+        timeframe="15m",
+        lookback=240,
+        top_k=4,
+        exchange_name="binance",
+        exchange_fallbacks=None,
+        exchange_timeout_ms=20000,
     ):
+
         self.timeframe = timeframe
         self.lookback = lookback
         self.top_k = top_k
-        self.min_atr_pct = min_atr_pct
-        self.soft_min_volume_ratio = soft_min_volume_ratio
-        self.rsi_long_min = rsi_long_min
-        self.rsi_long_max = rsi_long_max
 
         self.fetcher = MarketDataFetcher(
             exchange_name=exchange_name,
@@ -64,209 +48,193 @@ class CoinSelector:
             timeout_ms=exchange_timeout_ms,
         )
 
-        self._model_cache: dict[str, object] = {}
+        self._model_cache = {}
 
-    def _get_model(self, symbol: str):
+    # --------------------------------------------------------
+
+    def _get_model(self, symbol):
+
         if symbol in self._model_cache:
             return self._model_cache[symbol]
 
         from models.direction import DirectionModel
 
         model = DirectionModel.for_symbol(symbol)
+
         self._model_cache[symbol] = model
+
         return model
 
-    def _model_probability_and_threshold(self, symbol: str, df) -> tuple[float, float]:
+    # --------------------------------------------------------
+
+    def _calc_threshold(self, model, adx):
+
+        base = getattr(model, "long_threshold", 0.47)
+
+        long_th = min(base, 0.47)
+
+        if adx >= 30:
+            long_th -= 0.02
+        elif adx >= 20:
+            long_th -= 0.01
+
+        long_th = max(0.46, min(long_th, 0.60))
+
+        return long_th
+
+    # --------------------------------------------------------
+
+    def _expected_edge(self, prob, price, atr):
+
+        stop = price - atr * 1.7
+        tp = price + atr * 3.0
+
+        tp_ret = max((tp - price) / price, 0)
+        sl_ret = max((price - stop) / price, 0)
+
+        cost = 2 * (0.0010 + 0.0008)
+
+        return prob * tp_ret - (1 - prob) * sl_ret - cost
+
+    # --------------------------------------------------------
+
+    def _score_symbol(self, symbol):
+
         try:
-            model = self._get_model(symbol)
-            prob = float(model.predict_proba(df))
-            long_th = float(getattr(model, "long_threshold", 0.50))
 
-            if not (0.0 <= prob <= 1.0):
-                prob = 0.5
-
-            return prob, long_th
-        except Exception:
-            return 0.5, 0.50
-
-    def _score_symbol(self, symbol: str) -> float | None:
-        try:
-            raw_fetch_limit = max(self.lookback + 80, 320)
-
-            raw_df = self.fetcher.fetch_ohlcv(
+            raw = self.fetcher.fetch_ohlcv(
                 symbol,
                 self.timeframe,
-                limit=raw_fetch_limit,
+                limit=max(self.lookback + 80, 320),
             )
 
-            if raw_df is None:
+            if raw is None:
                 return None
 
-            if len(raw_df) < 260:
-                print(
-                    f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
-                    f"insufficient raw data ({len(raw_df)} rows)"
-                )
-                return None
+            df = raw.iloc[:-1].copy()
 
-            # Use only confirmed/closed candles.
-            df = raw_df.iloc[:-1].copy()
             df = compute_core_features(df)
 
-            if df.empty or len(df) < 50:
-                print(
-                    f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
-                    f"feature window too small ({len(df)} rows)"
-                )
+            if len(df) < 50:
                 return None
 
             last = df.iloc[-1]
+
             price = float(last["close"])
             adx = float(last["adx"])
+            atr = float(last["atr"])
             atr_pct = float(last["atr_pct"])
             ema_fast = float(last["ema_fast"])
             ema_slow = float(last["ema_slow"])
             ema200 = float(last["ema200"])
             rsi = float(last["rsi"])
 
-            # Clean volume data
-            vol_series = df["volume"].replace([np.inf, -np.inf], np.nan).dropna()
-            if len(vol_series) < 30:
-                print(
-                    f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
-                    f"not enough clean volume data"
-                )
-                return None
+            model = self._get_model(symbol)
 
-            recent_window = vol_series.tail(3)
-            baseline_window = vol_series.iloc[-23:-3]
+            prob = float(model.predict_proba(df))
 
-            if len(baseline_window) < 10:
-                print(
-                    f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
-                    f"baseline volume window too small"
-                )
-                return None
-
-            recent_vol = float(recent_window.median())
-            baseline_vol = float(baseline_window.median())
-
-            if recent_vol <= 0 or baseline_vol <= 0:
-                print(
-                    f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
-                    f"invalid volume data (recent={recent_vol:.2f}, base={baseline_vol:.2f})"
-                )
-                return None
-
-            volume_ratio = recent_vol / baseline_vol
-
-            if atr_pct < self.min_atr_pct:
-                print(
-                    f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
-                    f"atr_pct too low ({atr_pct:.4f})"
-                )
-                return None
-
-            prob_up, long_th = self._model_probability_and_threshold(symbol, df)
+            th = self._calc_threshold(model, adx)
 
             above_ema200 = price > ema200
-            bullish_cross = ema_fast > ema_slow
-            rsi_ok = self.rsi_long_min <= rsi <= self.rsi_long_max
-            prob_ok = prob_up >= long_th
+            bullish = ema_fast > ema_slow
 
-            adx_score = min(max(adx, 0.0) / 40.0, 1.0)
-            atr_score = min(max(atr_pct, 0.0) / 0.01, 1.0)
+            ema_gap = (price - ema200) / ema200 if ema200 else 0
 
-            # Soft volume handling
-            volume_score = min(max(volume_ratio, 0.0) / 1.5, 1.0)
-            if volume_ratio < self.soft_min_volume_ratio:
-                volume_score *= 0.35
+            momentum_override = (
+                bullish
+                and adx >= 18
+                and rsi >= 42
+                and prob >= th - 0.01
+                and ema_gap >= -0.035
+            )
 
-            # Entry-alignment scoring
-            structure_score = 0.0
+            edge = self._expected_edge(prob, price, atr)
+
+            score = 0.0
+
+            # prob
+            score += prob * 0.35
+
+            # trend
             if above_ema200:
-                structure_score += 0.45
-            if bullish_cross:
-                structure_score += 0.25
-            if rsi_ok:
-                structure_score += 0.15
-            if prob_ok:
-                structure_score += 0.15
+                score += 0.25
+            elif momentum_override:
+                score += 0.15
+            else:
+                score -= 0.25
 
-            # Penalties for conditions that runner frequently rejects
-            penalty = 0.0
-            reasons = []
+            # momentum
+            if bullish:
+                score += 0.15
+            else:
+                score -= 0.10
 
-            if not above_ema200:
-                penalty += 0.18
-                reasons.append("below_ema200")
+            # rsi
+            if 38 <= rsi <= 75:
+                score += 0.10
+            else:
+                score -= 0.10
 
-            if not bullish_cross:
-                penalty += 0.14
-                reasons.append("bearish_cross")
+            # volatility
+            score += min(atr_pct / 0.01, 1) * 0.10
 
-            if not rsi_ok:
-                penalty += 0.12
-                reasons.append("rsi_bad")
+            # adx
+            score += min(adx / 40, 1) * 0.10
 
-            if not prob_ok:
-                penalty += 0.10
-                reasons.append("prob_low")
-
-            score = (
-                prob_up * 0.25
-                + adx_score * 0.15
-                + atr_score * 0.15
-                + volume_score * 0.10
-                + structure_score * 0.35
-                - penalty
-            )
+            # edge
+            score += edge * 10
 
             print(
-                f"[CoinSelector] {symbol} | "
-                f"score={score:.3f} prob={prob_up:.3f}/{long_th:.3f} "
-                f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
-                f"vol_ratio={volume_ratio:.2f} "
-                f"above_ema200={above_ema200} bullish_cross={bullish_cross} "
-                f"reasons={reasons if reasons else ['ok']}"
+                f"[CoinSelector] {symbol} "
+                f"score={score:.3f} "
+                f"prob={prob:.3f}/{th:.3f} "
+                f"adx={adx:.1f} "
+                f"rsi={rsi:.1f} "
+                f"edge={edge:.5f} "
+                f"above200={above_ema200}"
             )
 
-            return float(score)
+            return score
 
-        except Exception as exc:
-            print(
-                f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
-                f"error during scoring — {exc}"
-            )
+        except Exception as e:
+
+            print(f"[CoinSelector] error {symbol}: {e}")
+
             return None
 
-    def select(self, symbols: list[str]) -> list[str]:
-        configured_symbols = symbols[:] if symbols else self.DEFAULT_SYMBOLS[:]
+    # --------------------------------------------------------
 
-        supported = [s for s in configured_symbols if self.fetcher.is_symbol_supported(s)]
-        unsupported = [s for s in configured_symbols if s not in supported]
-        if unsupported:
-            print(
-                f"[CoinSelector] Unsupported on {self.fetcher.exchange_name}: {unsupported}"
-            )
+    def select(self, symbols):
 
-        eligible = [s for s in supported if _has_trained_model(s)]
-        skipped = [s for s in supported if s not in eligible]
-        if skipped:
-            print(f"[CoinSelector] Skipped (no model): {skipped}")
+        symbols = symbols or self.DEFAULT_SYMBOLS
 
-        scores: dict[str, float] = {}
+        supported = [
+            s for s in symbols
+            if self.fetcher.is_symbol_supported(s)
+        ]
 
-        for symbol in eligible:
-            score = self._score_symbol(symbol)
-            if score is not None:
-                scores[symbol] = score
+        trained = [
+            s for s in supported
+            if _has_trained_model(s)
+        ]
 
-        ranked = sorted(scores, key=scores.get, reverse=True)
+        scores = {}
 
-        if not ranked:
-            print("⚠️ CoinSelector empty → fallback to configured symbols with trained models")
-            fallback = [s for s in configured_symbols if _has_trained_model(s)]
-            return fallback[: self.top_k]
+        for s in trained:
+
+            sc = self._score_symbol(s)
+
+            if sc is not None:
+                scores[s] = sc
+
+        if not scores:
+
+            return trained[: self.top_k]
+
+        ranked = sorted(
+            scores,
+            key=scores.get,
+            reverse=True,
+        )
 
         return ranked[: self.top_k]
