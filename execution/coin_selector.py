@@ -21,10 +21,9 @@ class CoinSelector:
     Scores symbols for live trading.
 
     Design goals:
-    - Uses only closed candles
-    - Fetches enough history for EMA200 + derived indicators
-    - Uses soft liquidity penalties instead of over-rejecting symbols
-    - Strongly prefers symbols that are closer to real StrategyEngine entry conditions
+    - uses only closed candles
+    - avoids selecting symbols the runner will almost certainly reject
+    - strongly prefers near-entry long setups
     """
 
     DEFAULT_SYMBOLS = [
@@ -44,7 +43,7 @@ class CoinSelector:
         top_k: int = 4,
         min_atr_pct: float = 0.001,
         soft_min_volume_ratio: float = 0.15,
-        rsi_long_min: float = 38.0,
+        rsi_long_min: float = 40.0,
         rsi_long_max: float = 75.0,
         exchange_name: str = "binance",
         exchange_fallbacks: list[str] | None = None,
@@ -171,6 +170,8 @@ class CoinSelector:
             bullish_cross = ema_fast > ema_slow
             rsi_ok = self.rsi_long_min <= rsi <= self.rsi_long_max
             prob_ok = prob_up >= long_th
+            ema_gap_pct = (price - ema200) / ema200 if ema200 > 0 else -1.0
+            near_recovery = ema_gap_pct >= -0.015
 
             adx_score = min(max(adx, 0.0) / 40.0, 1.0)
             atr_score = min(max(atr_pct, 0.0) / 0.01, 1.0)
@@ -179,41 +180,59 @@ class CoinSelector:
             if volume_ratio < self.soft_min_volume_ratio:
                 volume_score *= 0.35
 
+            reasons = []
+
+            # Hard alignment rule for long-only system:
+            # reject deep-below-ema200 coins entirely
+            if not above_ema200 and not near_recovery:
+                reasons.append("far_below_ema200")
+                print(
+                    f"[CoinSelector] {symbol} | "
+                    f"score=-999.000 prob={prob_up:.3f}/{long_th:.3f} "
+                    f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
+                    f"vol_ratio={volume_ratio:.2f} "
+                    f"above_ema200={above_ema200} bullish_cross={bullish_cross} "
+                    f"reasons={reasons}"
+                )
+                return -999.0
+
             structure_score = 0.0
             if above_ema200:
-                structure_score += 0.45
+                structure_score += 0.55
+            elif near_recovery:
+                structure_score += 0.20
+
             if bullish_cross:
-                structure_score += 0.25
+                structure_score += 0.20
             if rsi_ok:
-                structure_score += 0.15
+                structure_score += 0.10
             if prob_ok:
                 structure_score += 0.15
 
             penalty = 0.0
-            reasons = []
 
             if not above_ema200:
-                penalty += 0.18
+                penalty += 0.12
                 reasons.append("below_ema200")
 
             if not bullish_cross:
-                penalty += 0.14
+                penalty += 0.16
                 reasons.append("bearish_cross")
 
             if not rsi_ok:
-                penalty += 0.12
+                penalty += 0.10
                 reasons.append("rsi_bad")
 
             if not prob_ok:
-                penalty += 0.10
+                penalty += 0.08
                 reasons.append("prob_low")
 
             score = (
-                prob_up * 0.25
-                + adx_score * 0.15
-                + atr_score * 0.15
+                prob_up * 0.22
+                + adx_score * 0.14
+                + atr_score * 0.14
                 + volume_score * 0.10
-                + structure_score * 0.35
+                + structure_score * 0.40
                 - penalty
             )
 
@@ -259,9 +278,10 @@ class CoinSelector:
 
         ranked = sorted(scores, key=scores.get, reverse=True)
 
-        if not ranked:
-            print("⚠️ CoinSelector empty → fallback to configured symbols with trained models")
-            fallback = [s for s in configured_symbols if _has_trained_model(s)]
-            return fallback[: self.top_k]
+        filtered_ranked = [s for s in ranked if scores[s] > -100]
 
-        return ranked[: self.top_k]
+        if not filtered_ranked:
+            print("⚠️ CoinSelector found no long-ready symbols")
+            return []
+
+        return filtered_ranked[: self.top_k]
