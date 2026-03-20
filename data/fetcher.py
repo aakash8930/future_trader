@@ -1,5 +1,3 @@
-#data/fetcher.py
-
 import time
 import ccxt
 import pandas as pd
@@ -12,10 +10,6 @@ from ccxt.base.errors import (
 
 
 def _sanitize_error_msg(error: Exception) -> str:
-    """
-    Sanitize error messages to prevent HTML dumps in logs.
-    Returns a concise one-line summary.
-    """
     msg = str(error)
 
     if "<html" in msg.lower() or "<!doctype" in msg.lower() or "<body" in msg.lower():
@@ -62,13 +56,12 @@ class MarketDataFetcher:
             if fallback_exchanges is None:
                 fallback_exchanges = ["bybit", "kraken", "okx"]
 
-            (
-                MarketDataFetcher._exchange,
-                MarketDataFetcher._exchange_name,
-            ) = self._init_exchange_with_fallback(
-                exchange_name,
-                fallback_exchanges,
-                timeout_ms,
+            MarketDataFetcher._exchange, MarketDataFetcher._exchange_name = (
+                self._init_exchange_with_fallback(
+                    exchange_name,
+                    fallback_exchanges,
+                    timeout_ms,
+                )
             )
 
             if MarketDataFetcher._exchange:
@@ -202,8 +195,8 @@ class MarketDataFetcher:
         retries: int = 3,
     ) -> float | None:
         """
-        Fetch latest traded price for intraloop SL/TP checks.
-        Much faster and more realistic than waiting for the next candle close.
+        Real-time price for managing open positions.
+        Uses ticker last/close/bid/ask fallback.
         """
         if not self.is_symbol_supported(symbol):
             return None
@@ -212,31 +205,26 @@ class MarketDataFetcher:
             try:
                 ticker = self.exchange.fetch_ticker(symbol)
 
-                last = ticker.get("last")
-                close = ticker.get("close")
-                bid = ticker.get("bid")
-                ask = ticker.get("ask")
+                candidates = [
+                    ticker.get("last"),
+                    ticker.get("close"),
+                    ticker.get("bid"),
+                    ticker.get("ask"),
+                ]
 
-                price = last or close
-                if price is None and bid is not None and ask is not None:
-                    price = (float(bid) + float(ask)) / 2.0
+                for value in candidates:
+                    if value is not None:
+                        price = float(value)
+                        if price > 0:
+                            return price
 
-                if price is None:
-                    raise RuntimeError("ticker missing usable price")
-
-                price = float(price)
-                if price <= 0:
-                    raise RuntimeError("invalid ticker price")
-
-                return price
+                raise RuntimeError("ticker returned no usable price")
 
             except (RequestTimeout, NetworkError):
                 if attempt == retries:
                     return None
-                time.sleep(min(1.0 * attempt, 3.0))
+                time.sleep(1 * attempt)
             except Exception:
-                if attempt == retries:
-                    return None
-                time.sleep(min(1.0 * attempt, 3.0))
+                return None
 
         return None
