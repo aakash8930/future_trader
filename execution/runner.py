@@ -1,5 +1,3 @@
-#execution/runner.py
-
 import time
 from datetime import datetime, timedelta
 
@@ -84,70 +82,7 @@ class TradingRunner:
 
         print(f"[AUTONOMOUS AI] {symbol} ready")
 
-    def _manage_open_position_realtime(self) -> bool:
-        """
-        Manage exits using live ticker price on every loop tick.
-        Returns True if position was handled and caller should stop further processing.
-        """
-        if not self.broker.position:
-            return False
-
-        live_price = self.data.fetch_last_price(self.symbol)
-        if live_price is None:
-            return False
-
-        atr = self.last_decision.atr if self.last_decision else 0.0
-
-        if (
-            not self._profit_lock_activated
-            and self.take_profit_1 is not None
-            and live_price >= self.take_profit_1
-        ):
-            self._profit_lock_activated = True
-            profit_lock_sl = self.last_entry_price + atr * 0.5
-            self.stop_loss = max(self.stop_loss, profit_lock_sl)
-            print(
-                f"[{self.symbol}] TP1 HIT | live_price={_fmt_price(live_price, self.symbol)} "
-                f"| lock_sl={_fmt_price(self.stop_loss, self.symbol)}"
-            )
-
-        if self._profit_lock_activated and atr > 0:
-            new_sl = live_price - self.cfg.trail_atr_mult * atr
-            if new_sl > self.stop_loss:
-                self.stop_loss = new_sl
-                print(
-                    f"[{self.symbol}] TRAILING SL | "
-                    f"live_price={_fmt_price(live_price, self.symbol)} | "
-                    f"sl={_fmt_price(self.stop_loss, self.symbol)}"
-                )
-
-        if self.stop_loss is not None and live_price <= self.stop_loss:
-            self._close_position(live_price, "stop_loss")
-            return True
-
-        if self.take_profit is not None and live_price >= self.take_profit:
-            self._close_position(live_price, "take_profit")
-            return True
-
-        return True
-
     def run_once(self):
-        today = datetime.utcnow().date()
-        self.risk_state.reset_if_new_day(today)
-        self.supervisor.update_equity(self.risk_state.current_balance)
-
-        if not self.market_guard.allow_trading(
-            balance=self.risk_state.current_balance,
-            today=today,
-        ):
-            return
-
-        # Always monitor open position first using live ticker price.
-        if self.broker.position:
-            handled = self._manage_open_position_realtime()
-            if handled:
-                return
-
         raw_df = self.data.fetch_ohlcv(self.symbol, self.timeframe, self.lookback + 5)
 
         if raw_df is None:
@@ -163,11 +98,21 @@ class TradingRunner:
 
         self.last_processed_candle_time = closed_candle_time
 
-        # Work only with fully closed candles for entries.
+        # Closed-candle dataframe for signal generation only
         df = raw_df.iloc[:-1].copy()
         df = compute_core_features(df)
 
         if df.empty:
+            return
+
+        today = datetime.utcnow().date()
+        self.risk_state.reset_if_new_day(today)
+        self.supervisor.update_equity(self.risk_state.current_balance)
+
+        if not self.market_guard.allow_trading(
+            balance=self.risk_state.current_balance,
+            today=today,
+        ):
             return
 
         regime = self.regime_ctrl.detect(df)
@@ -175,7 +120,7 @@ class TradingRunner:
             if hasattr(self.regime_ctrl, "skip_reason"):
                 print(f"[{self.symbol}] SKIP | {self.regime_ctrl.skip_reason(df)}")
             else:
-                print(f"[{self.symbol}] SKIP | regime_blocked")
+                print(f"[{self.symbol}] SKIP | regime_block({regime})")
             return
 
         supervisor_dec = self.supervisor.decide()
@@ -183,10 +128,42 @@ class TradingRunner:
             print(f"[{self.symbol}] SKIP | supervisor_block({supervisor_dec.reason})")
             return
 
-        # Position may still be open if realtime manager could not close it.
+        closed_price = float(df.iloc[-1]["close"])
+        atr = float(df.iloc[-1]["atr"])
+
+        # Real-time price for open-position management only
+        live_price = self.data.fetch_last_price(self.symbol)
+        manage_price = live_price if live_price is not None else closed_price
+
+        # ---------------- OPEN POSITION MANAGEMENT ----------------
         if self.broker.position:
+            if not self._profit_lock_activated and manage_price >= self.take_profit_1:
+                self._profit_lock_activated = True
+                profit_lock_sl = self.last_entry_price + atr * 0.5
+                self.stop_loss = max(self.stop_loss, profit_lock_sl)
+                print(
+                    f"[{self.symbol}] TP1 HIT | "
+                    f"manage_price={_fmt_price(manage_price, self.symbol)} | "
+                    f"lock_sl={_fmt_price(self.stop_loss, self.symbol)}"
+                )
+
+            if self._profit_lock_activated:
+                new_sl = manage_price - self.cfg.trail_atr_mult * atr
+                if new_sl > self.stop_loss:
+                    self.stop_loss = new_sl
+                    print(f"[{self.symbol}] TRAILING SL | {_fmt_price(self.stop_loss, self.symbol)}")
+
+            if manage_price <= self.stop_loss:
+                self._close_position(manage_price, "stop_loss")
+                return
+
+            if manage_price >= self.take_profit:
+                self._close_position(manage_price, "take_profit")
+                return
+
             return
 
+        # ---------------- ENTRY ----------------
         if self.last_trade_time and datetime.utcnow() - self.last_trade_time < self.cooldown:
             return
 
@@ -268,19 +245,9 @@ class TradingRunner:
         icon = "🛑" if exit_reason == "stop_loss" else "🎯"
         print(
             f"{icon} {self.symbol} {exit_reason.upper().replace('_', ' ')} | "
-            f"exit={_fmt_price(price, self.symbol)} | "
             f"pnl={pnl:.4f} | balance={self.risk_state.current_balance:.2f} | "
             f"avg_entry={_fmt_price(avg_entry, self.symbol)} | adds={add_count}"
         )
-
-        self.stop_loss = None
-        self.take_profit = None
-        self.take_profit_1 = None
-        self._profit_lock_activated = False
-        self.last_entry_price = None
-        self.last_entry_prob = None
-        self.last_entry_side = None
-        self.last_decision = None
 
     def run_loop(self, sleep_seconds: int = 60):
         print(f"🚀 {self.symbol} loop started (sleep={sleep_seconds}s)")
