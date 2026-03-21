@@ -53,7 +53,7 @@ class LiveSettings:
     strategy_rsi_long_max: float = 75.0
     strategy_fee_pct_per_side: float = 0.0010
     strategy_slippage_pct_per_side: float = 0.0008
-    strategy_min_expected_edge: float = 0.00005
+    strategy_min_expected_edge: float = -0.0020
     strategy_stop_atr_mult: float = 1.6
     strategy_take_atr_mult: float = 3.0
     strategy_trail_atr_mult: float = 1.0

@@ -15,11 +15,12 @@ def build_strategy_config(settings: LiveSettings) -> StrategyConfig:
         rsi_long_max=settings.strategy_rsi_long_max,
         fee_pct_per_side=settings.strategy_fee_pct_per_side,
         slippage_pct_per_side=settings.strategy_slippage_pct_per_side,
-        min_expected_edge=settings.strategy_min_expected_edge,
         stop_atr_mult=settings.strategy_stop_atr_mult,
         take_atr_mult=settings.strategy_take_atr_mult,
         trail_atr_mult=settings.strategy_trail_atr_mult,
         cooldown_minutes=settings.cooldown_minutes,
+        min_expected_edge=-0.0020,  # settings.strategy_min_expected_edge,
+        base_long_threshold=0.46,  # settings.strategy_base_long_threshold,
     )
 
 

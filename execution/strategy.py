@@ -15,14 +15,14 @@ class StrategyConfig:
     rsi_long_min:          float = 38.0
     rsi_long_max:          float = 75.0
 
-    base_long_threshold:   float = 0.47
+    base_long_threshold:   float = 0.46
 
     stop_atr_mult:         float = 1.7
     take_atr_mult:         float = 3.0
 
     fee_pct_per_side:      float = 0.0010
     slippage_pct_per_side: float = 0.0008
-    min_expected_edge:     float = -0.00030
+    min_expected_edge:     float = -0.00150
 
     trail_activate_atr_mult: float = 1.0
     trail_atr_mult:          float = 1.0
@@ -105,7 +105,7 @@ class StrategyEngine:
         elif adx >= 20:
             long_th -= 0.01
 
-        long_th = max(self.cfg.min_prob, min(long_th, 0.60))
+        long_th = max(0.44, min(long_th, 0.60))
 
         stop_loss = price - atr * self.cfg.stop_atr_mult
         take_profit = price + atr * self.cfg.take_atr_mult
