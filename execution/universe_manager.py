@@ -3,12 +3,18 @@
 import time
 from typing import List
 
-from execution.coin_selector import CoinSelector, _has_trained_model
+from execution.coin_selector import CoinSelector
 
 
 class UniverseManager:
     """
     Manages the tradable symbol universe autonomously.
+
+    Key behavior:
+    - If selector finds no valid long-ready symbols, the universe goes flat.
+    - No fallback to weak / merely-trained symbols during bad market conditions.
+    - Switches symbols only when the new candidate set is meaningfully better,
+      unless the current universe is badly degraded.
     """
 
     def __init__(
@@ -32,6 +38,7 @@ class UniverseManager:
         self.max_active = max_active
         self.refresh_seconds = refresh_minutes * 60
         self.last_refresh = 0.0
+
         self.active_symbols: List[str] = []
         self.active_scores: dict[str, float] = {}
         self.min_symbol_switch_gap = min_symbol_switch_gap
@@ -48,12 +55,6 @@ class UniverseManager:
             exchange_timeout_ms=exchange_timeout_ms,
         )
 
-    def _fallback_symbols(self) -> List[str]:
-        fetcher = self.selector.fetcher
-        supported = [s for s in self.all_symbols if fetcher.is_symbol_supported(s)]
-        eligible = [s for s in supported if _has_trained_model(s)]
-        return eligible[: self.max_active]
-
     def _scores_for_symbols(self, symbols: List[str]) -> dict[str, float]:
         scores: dict[str, float] = {}
         for symbol in symbols:
@@ -64,6 +65,7 @@ class UniverseManager:
 
     def refresh_if_needed(self) -> List[str]:
         now = time.time()
+
         if now - self.last_refresh < self.refresh_seconds and self.active_symbols:
             return self.active_symbols
 
@@ -72,17 +74,22 @@ class UniverseManager:
         ranked = self.selector.select(self.all_symbols)
         candidate_symbols = ranked[: self.max_active]
 
+        # Critical fix:
+        # If selector has no valid symbols, go flat. Do NOT fallback.
         if not candidate_symbols:
-            print("[Universe] selector returned empty → using configured fallback symbols")
-            candidate_symbols = self._fallback_symbols()
-
-        if not candidate_symbols:
-            print("[Universe] no eligible symbols available")
+            print("[Universe] selector found no valid symbols → going flat")
             self.active_symbols = []
             self.active_scores = {}
             return self.active_symbols
 
         candidate_scores = self._scores_for_symbols(candidate_symbols)
+
+        # If scoring produced nothing usable, also go flat.
+        if not candidate_scores:
+            print("[Universe] candidate symbols could not be scored → going flat")
+            self.active_symbols = []
+            self.active_scores = {}
+            return self.active_symbols
 
         if not self.active_symbols:
             self.active_symbols = candidate_symbols
@@ -94,8 +101,14 @@ class UniverseManager:
         current_total = sum(current_scores.get(s, 0.0) for s in self.active_symbols)
         candidate_total = sum(candidate_scores.get(s, 0.0) for s in candidate_symbols)
 
-        # Force switch if current universe is badly degraded
-        current_bad = any(score <= -900 for score in current_scores.values())
+        # Current universe is considered degraded if:
+        # - any symbol is in hard-reject zone
+        # - or total score is too weak
+        # - or current symbols cannot even be scored reliably
+        current_bad = (
+            not current_scores
+            or any(score <= -900 for score in current_scores.values())
+        )
         current_weak = current_total <= 0.15
 
         should_switch = (
