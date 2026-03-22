@@ -55,12 +55,24 @@ class MultiSymbolTradingSystem:
         )
 
     # ----------------------------------
+    def _filtered_active_symbols(self, symbols: list[str]) -> list[str]:
+        """
+        Apply model-quality gate before runner creation and trading.
+        Prevents bad/weak symbols from staying active and spamming logs.
+        """
+        filtered: list[str] = []
+
+        for symbol in symbols:
+            if self.settings.require_model_quality and not self._model_quality_ok(symbol):
+                print(f"[{symbol}] rejected by model-quality gate")
+                continue
+            filtered.append(symbol)
+
+        return filtered
+
+    # ----------------------------------
     def _ensure_runner(self, symbol: str):
         if symbol in self.runners:
-            return
-
-        if self.settings.require_model_quality and not self._model_quality_ok(symbol):
-            print(f"[{symbol}] rejected by model-quality gate")
             return
 
         runner = TradingRunner(
@@ -82,15 +94,32 @@ class MultiSymbolTradingSystem:
         print(f"➕ Runner added for {symbol}")
 
     # ----------------------------------
+    def _remove_inactive_runners(self, active_symbols: list[str]):
+        inactive = [symbol for symbol in self.runners if symbol not in active_symbols]
+        for symbol in inactive:
+            del self.runners[symbol]
+            print(f"➖ Runner removed for {symbol}")
+
+    # ----------------------------------
     def run_loop(self):
         print(f"🚀 Autonomous trading system started [MODE={self.settings.mode}]")
 
         while True:
             try:
                 active_symbols = self.universe.refresh_if_needed()
+                active_symbols = self._filtered_active_symbols(active_symbols)
+
+                # If nothing survives universe + quality gate, stay flat.
+                if not active_symbols:
+                    self._remove_inactive_runners([])
+                    print("[SYSTEM] no active tradable symbols → flat mode")
+                    time.sleep(self.settings.sleep_seconds)
+                    continue
 
                 for symbol in active_symbols:
                     self._ensure_runner(symbol)
+
+                self._remove_inactive_runners(active_symbols)
 
                 for symbol, runner in list(self.runners.items()):
                     if symbol not in active_symbols:
@@ -102,15 +131,15 @@ class MultiSymbolTradingSystem:
             except KeyboardInterrupt:
                 print("Stopped by user")
                 break
+
             except RuntimeError as e:
-                # Clean error for exchange/config issues
                 error_msg = str(e)
                 if "FETCHER" in error_msg or "exchange" in error_msg.lower():
                     print(f"\n❌ FATAL: {error_msg}")
                     print("\nSystem cannot start due to exchange connectivity issues.")
                     break
-                # Re-raise other runtime errors
                 raise
+
             except Exception as e:
                 print(f"System error: {e}")
                 time.sleep(30)
