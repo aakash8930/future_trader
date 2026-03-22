@@ -90,10 +90,21 @@ class UniverseManager:
             print(f"🔄 Universe updated → {self.active_symbols}")
             return self.active_symbols
 
-        current_total = sum(self.active_scores.get(s, 0.0) for s in self.active_symbols)
+        current_scores = self._scores_for_symbols(self.active_symbols)
+        current_total = sum(current_scores.get(s, 0.0) for s in self.active_symbols)
         candidate_total = sum(candidate_scores.get(s, 0.0) for s in candidate_symbols)
 
-        if candidate_total >= current_total + self.min_symbol_switch_gap:
+        # Force switch if current universe is badly degraded
+        current_bad = any(score <= -900 for score in current_scores.values())
+        current_weak = current_total <= 0.15
+
+        should_switch = (
+            current_bad
+            or current_weak
+            or candidate_total >= current_total + self.min_symbol_switch_gap
+        )
+
+        if should_switch:
             if candidate_symbols != self.active_symbols:
                 print(
                     f"🔄 Universe updated → {candidate_symbols} "
@@ -106,5 +117,6 @@ class UniverseManager:
                 f"[Universe] keeping current symbols {self.active_symbols} "
                 f"(old_score={current_total:.3f}, new_score={candidate_total:.3f})"
             )
+            self.active_scores = current_scores
 
         return self.active_symbols

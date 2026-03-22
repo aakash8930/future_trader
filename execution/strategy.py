@@ -9,46 +9,46 @@ from risk.sizing import fixed_fractional_size
 @dataclass
 class StrategyConfig:
     """Single source of truth for all strategy parameters."""
-    min_prob:              float = 0.46
-    min_adx:               float = 10.0
-    min_atr_pct:           float = 0.0008
-    rsi_long_min:          float = 38.0
-    rsi_long_max:          float = 75.0
+    min_prob: float = 0.46
+    min_adx: float = 10.0
+    min_atr_pct: float = 0.0008
+    rsi_long_min: float = 38.0
+    rsi_long_max: float = 75.0
 
-    base_long_threshold:   float = 0.46
+    base_long_threshold: float = 0.46
 
-    stop_atr_mult:         float = 1.7
-    take_atr_mult:         float = 3.0
+    stop_atr_mult: float = 1.7
+    take_atr_mult: float = 3.0
 
-    fee_pct_per_side:      float = 0.0010
+    fee_pct_per_side: float = 0.0010
     slippage_pct_per_side: float = 0.0008
-    min_expected_edge:     float = -0.00150
+    min_expected_edge: float = -0.00150
 
     trail_activate_atr_mult: float = 1.0
-    trail_atr_mult:          float = 1.0
+    trail_atr_mult: float = 1.0
 
-    cooldown_minutes:      int = 30
+    cooldown_minutes: int = 30
 
-    max_pyramid_adds:      int = 0
-    pyramid_trigger_pct:   float = 0.005
-    pyramid_qty_scales:    List[float] = field(default_factory=lambda: [0.6, 0.4, 0.25])
+    max_pyramid_adds: int = 0
+    pyramid_trigger_pct: float = 0.005
+    pyramid_qty_scales: List[float] = field(default_factory=lambda: [0.6, 0.4, 0.25])
 
 
 @dataclass
 class SignalDecision:
-    side:          Optional[str]
-    prob:          float
-    threshold:     float
-    reason:        str
-    adx:           float
-    atr:           float
-    atr_pct:       float
-    regime:        str
-    ema_fast:      float
-    ema_slow:      float
-    price:         float
-    stop_loss:     float
-    take_profit:   float
+    side: Optional[str]
+    prob: float
+    threshold: float
+    reason: str
+    adx: float
+    atr: float
+    atr_pct: float
+    regime: str
+    ema_fast: float
+    ema_slow: float
+    price: float
+    stop_loss: float
+    take_profit: float
     expected_edge: float
 
 
@@ -100,12 +100,11 @@ class StrategyEngine:
         model_th = float(getattr(self.model, "long_threshold", self.cfg.base_long_threshold))
         long_th = min(model_th, self.cfg.base_long_threshold)
 
+        # Slight threshold relaxation only in stronger trend
         if adx >= 30:
-            long_th -= 0.02
-        elif adx >= 20:
             long_th -= 0.01
 
-        long_th = max(0.44, min(long_th, 0.60))
+        long_th = max(0.47, min(long_th, 0.60))
 
         stop_loss = price - atr * self.cfg.stop_atr_mult
         take_profit = price + atr * self.cfg.take_atr_mult
@@ -146,13 +145,13 @@ class StrategyEngine:
         bullish_cross = ema_fast > ema_slow
         ema_gap_pct = (price - ema200) / ema200 if ema200 > 0 else 0.0
 
-        # Recovery / rebound allowance below EMA200 for shadow mode learning
+        # Controlled rebound allowance just below EMA200
         momentum_override = (
             bullish_cross
-            and adx >= 18
-            and rsi >= 42
-            and prob_up >= long_th - 0.01
-            and ema_gap_pct >= -0.035
+            and adx >= 22
+            and rsi >= 45
+            and prob_up >= long_th + 0.005
+            and ema_gap_pct >= -0.012
         )
 
         if not above_ema200 and not momentum_override:
@@ -162,13 +161,14 @@ class StrategyEngine:
             )
             return base
 
-        # Above EMA200 path: still prefer bullish cross, but allow near-cross continuation
+        # Above EMA200 path: allow near-cross continuation only if quality is better
         if above_ema200 and not bullish_cross:
-            near_cross = ema_fast >= ema_slow * 0.998
+            near_cross = ema_fast >= ema_slow * 0.999
             continuation_override = (
                 near_cross
-                and adx >= 18
-                and prob_up >= long_th + 0.005
+                and adx >= 22
+                and rsi >= 50
+                and prob_up >= long_th + 0.01
             )
             if not continuation_override:
                 base.reason = (
