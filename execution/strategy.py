@@ -1,3 +1,5 @@
+# execution/strategy.py
+
 from dataclasses import dataclass, field
 from typing import Optional, List
 import pandas as pd
@@ -9,29 +11,41 @@ from risk.sizing import fixed_fractional_size
 @dataclass
 class StrategyConfig:
     """Single source of truth for all strategy parameters."""
-    min_prob: float = 0.46
-    min_adx: float = 10.0
-    min_atr_pct: float = 0.0008
-    rsi_long_min: float = 38.0
-    rsi_long_max: float = 75.0
 
-    base_long_threshold: float = 0.46
+    # Core signal quality
+    min_prob: float = 0.49
+    min_adx: float = 16.0
+    min_atr_pct: float = 0.0012
+    rsi_long_min: float = 42.0
+    rsi_long_max: float = 68.0
 
-    stop_atr_mult: float = 1.7
-    take_atr_mult: float = 3.0
+    # Threshold handling
+    base_long_threshold: float = 0.50
 
+    # Risk / reward
+    stop_atr_mult: float = 1.55
+    take_atr_mult: float = 2.9
+
+    # Trading costs
     fee_pct_per_side: float = 0.0010
     slippage_pct_per_side: float = 0.0008
-    min_expected_edge: float = -0.00150
 
-    trail_activate_atr_mult: float = 1.0
+    # Must be positive now; prevents weak trades that only look barely acceptable
+    min_expected_edge: float = 0.00025
+
+    # Profit management
+    trail_activate_atr_mult: float = 0.9
     trail_atr_mult: float = 1.0
 
+    # Cooldown
     cooldown_minutes: int = 30
 
+    # Pyramiding disabled
     max_pyramid_adds: int = 0
     pyramid_trigger_pct: float = 0.005
-    pyramid_qty_scales: List[float] = field(default_factory=lambda: [0.6, 0.4, 0.25])
+    pyramid_qty_scales: List[float] = field(
+        default_factory=lambda: [0.6, 0.4, 0.25]
+    )
 
 
 @dataclass
@@ -86,6 +100,7 @@ class StrategyEngine:
             return _null
 
         row = df.iloc[-1]
+
         price = float(row["close"])
         ema200 = float(row["ema200"])
         ema_fast = float(row["ema_fast"])
@@ -97,14 +112,18 @@ class StrategyEngine:
 
         prob_up = float(self.model.predict_proba(df))
 
-        model_th = float(getattr(self.model, "long_threshold", self.cfg.base_long_threshold))
-        long_th = min(model_th, self.cfg.base_long_threshold)
+        model_th = float(
+            getattr(self.model, "long_threshold", self.cfg.base_long_threshold)
+        )
+        long_th = max(model_th, self.cfg.base_long_threshold)
 
-        # Slight threshold relaxation only in stronger trend
-        if adx >= 30:
-            long_th -= 0.01
+        # In stronger trends we can relax a little, but not too much
+        if adx >= 32:
+            long_th -= 0.015
+        elif adx >= 24:
+            long_th -= 0.010
 
-        long_th = max(0.47, min(long_th, 0.60))
+        long_th = max(self.cfg.min_prob, min(long_th, 0.58))
 
         stop_loss = price - atr * self.cfg.stop_atr_mult
         take_profit = price + atr * self.cfg.take_atr_mult
@@ -131,7 +150,7 @@ class StrategyEngine:
             return base
 
         if atr_pct < self.cfg.min_atr_pct:
-            base.reason = f"atr_pct_low({atr_pct:.4f}<{self.cfg.min_atr_pct})"
+            base.reason = f"atr_pct_low({atr_pct:.4f}<{self.cfg.min_atr_pct:.4f})"
             return base
 
         if not (self.cfg.rsi_long_min <= rsi <= self.cfg.rsi_long_max):
@@ -144,36 +163,40 @@ class StrategyEngine:
         above_ema200 = price > ema200
         bullish_cross = ema_fast > ema_slow
         ema_gap_pct = (price - ema200) / ema200 if ema200 > 0 else 0.0
-
-        # Controlled rebound allowance just below EMA200
-        momentum_override = (
-            bullish_cross
-            and adx >= 22
-            and rsi >= 45
-            and prob_up >= long_th + 0.005
-            and ema_gap_pct >= -0.012
+        ema_fast_vs_slow_pct = (
+            (ema_fast - ema_slow) / ema_slow if ema_slow > 0 else 0.0
         )
 
-        if not above_ema200 and not momentum_override:
-            base.reason = (
-                f"price_below_ema200(price={price:.4f}<=ema200={ema200:.4f}, "
-                f"ema_fast={ema_fast:.4f}, ema_slow={ema_slow:.4f}, adx={adx:.1f})"
-            )
-            return base
-
-        # Above EMA200 path: allow near-cross continuation only if quality is better
-        if above_ema200 and not bullish_cross:
-            near_cross = ema_fast >= ema_slow * 0.999
-            continuation_override = (
-                near_cross
-                and adx >= 22
+        # Main path: only prefer longs when structure is clearly bullish
+        if above_ema200:
+            if not bullish_cross:
+                near_cross = ema_fast >= ema_slow * 0.999
+                continuation_override = (
+                    near_cross
+                    and adx >= 22
+                    and prob_up >= long_th + 0.01
+                    and ema_gap_pct >= 0.002
+                )
+                if not continuation_override:
+                    base.reason = (
+                        f"ema_cross_bearish(fast={ema_fast:.4f}<=slow={ema_slow:.4f}, "
+                        f"price={price:.4f}, ema200={ema200:.4f})"
+                    )
+                    return base
+        else:
+            # Much stricter recovery entry below EMA200
+            momentum_override = (
+                bullish_cross
+                and adx >= 26
+                and prob_up >= long_th + 0.02
                 and rsi >= 50
-                and prob_up >= long_th + 0.01
+                and ema_gap_pct >= -0.010
+                and ema_fast_vs_slow_pct >= 0.0015
             )
-            if not continuation_override:
+            if not momentum_override:
                 base.reason = (
-                    f"ema_cross_bearish(fast={ema_fast:.4f}<=slow={ema_slow:.4f}, "
-                    f"price={price:.4f}, ema200={ema200:.4f})"
+                    f"price_below_ema200(price={price:.4f}<=ema200={ema200:.4f}, "
+                    f"ema_fast={ema_fast:.4f}, ema_slow={ema_slow:.4f}, adx={adx:.1f})"
                 )
                 return base
 
@@ -215,6 +238,7 @@ class StrategyEngine:
 
         tp_return = max((take_profit - entry_price) / entry_price, 0.0)
         sl_return = max((entry_price - stop_loss) / entry_price, 0.0)
+
         round_trip_cost = 2.0 * (
             self.cfg.fee_pct_per_side + self.cfg.slippage_pct_per_side
         )
@@ -244,7 +268,7 @@ class StrategyEngine:
         if df.empty:
             return 0.0
 
-        prob_up = self.model.predict_proba(df)
-        atr_pct = df.iloc[-1]["atr_pct"]
-        adx = df.iloc[-1]["adx"]
+        prob_up = float(self.model.predict_proba(df))
+        atr_pct = float(df.iloc[-1]["atr_pct"])
+        adx = float(df.iloc[-1]["adx"])
         return float(prob_up * atr_pct * adx)
