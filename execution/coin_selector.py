@@ -6,7 +6,6 @@ import numpy as np
 from data.fetcher import MarketDataFetcher
 from features.technicals import compute_core_features
 
-
 def _has_trained_model(symbol: str) -> bool:
     folder = os.path.join("models", symbol.replace("/", "_"))
     return (
