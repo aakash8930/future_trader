@@ -1,5 +1,6 @@
 # execution/strategy.py
 
+
 from dataclasses import dataclass, field
 from typing import Optional, List
 import pandas as pd
@@ -13,34 +14,33 @@ class StrategyConfig:
     """Single source of truth for all strategy parameters."""
 
     # Core signal quality
-    min_prob: float = 0.49
-    min_adx: float = 16.0
-    min_atr_pct: float = 0.0012
-    rsi_long_min: float = 42.0
-    rsi_long_max: float = 68.0
+    min_adx: float = 14.0
+    min_atr_pct: float = 0.0010
+    rsi_long_min: float = 40.0
+    rsi_long_max: float = 70.0
 
     # Threshold handling
-    base_long_threshold: float = 0.50
+    base_long_threshold: float = 0.49
 
     # Risk / reward
-    stop_atr_mult: float = 1.55
-    take_atr_mult: float = 2.90
+    stop_atr_mult: float = 1.45
+    take_atr_mult: float = 3.2
 
     # Trading costs
     fee_pct_per_side: float = 0.0010
     slippage_pct_per_side: float = 0.0008
 
-    # Must stay positive to avoid weak trades
-    min_expected_edge: float = 0.00025
+    # Positive edge only, but not too strict
+    min_expected_edge: float = 0.00005
 
     # Profit management
-    trail_activate_atr_mult: float = 0.90
-    trail_atr_mult: float = 1.00
+    trail_activate_atr_mult: float = 0.8
+    trail_atr_mult: float = 0.9
 
     # Cooldown
     cooldown_minutes: int = 30
 
-    # Pyramiding
+    # Pyramiding disabled
     max_pyramid_adds: int = 0
     pyramid_trigger_pct: float = 0.005
     pyramid_qty_scales: List[float] = field(
@@ -115,14 +115,15 @@ class StrategyEngine:
         model_th = float(
             getattr(self.model, "long_threshold", self.cfg.base_long_threshold)
         )
-        long_th = max(model_th, self.cfg.base_long_threshold)
+        long_th = min(model_th, self.cfg.base_long_threshold)
 
-        if adx >= 32:
-            long_th -= 0.015
-        elif adx >= 24:
-            long_th -= 0.010
+        # Relax slightly in stronger trends
+        if adx >= 30:
+            long_th -= 0.02
+        elif adx >= 22:
+            long_th -= 0.01
 
-        long_th = max(self.cfg.min_prob, min(long_th, 0.58))
+        long_th = max(0.47, min(long_th, 0.58))
 
         stop_loss = price - atr * self.cfg.stop_atr_mult
         take_profit = price + atr * self.cfg.take_atr_mult
@@ -168,12 +169,12 @@ class StrategyEngine:
 
         if above_ema200:
             if not bullish_cross:
-                near_cross = ema_fast >= ema_slow * 0.999
+                near_cross = ema_fast >= ema_slow * 0.9985
                 continuation_override = (
                     near_cross
-                    and adx >= 22
-                    and prob_up >= long_th + 0.01
-                    and ema_gap_pct >= 0.002
+                    and adx >= 20
+                    and prob_up >= long_th + 0.006
+                    and ema_gap_pct >= 0.001
                 )
                 if not continuation_override:
                     base.reason = (
@@ -182,13 +183,14 @@ class StrategyEngine:
                     )
                     return base
         else:
+            # Controlled recovery entry below EMA200
             momentum_override = (
                 bullish_cross
-                and adx >= 26
-                and prob_up >= long_th + 0.02
-                and rsi >= 50
-                and ema_gap_pct >= -0.010
-                and ema_fast_vs_slow_pct >= 0.0015
+                and adx >= 24
+                and prob_up >= long_th + 0.015
+                and rsi >= 48
+                and ema_gap_pct >= -0.008
+                and ema_fast_vs_slow_pct >= 0.0010
             )
             if not momentum_override:
                 base.reason = (
@@ -218,9 +220,7 @@ class StrategyEngine:
             )
             return base
 
-        trend_label = (
-            "above_ema200" if above_ema200 else "momentum_override_below_ema200"
-        )
+        trend_label = "above_ema200" if above_ema200 else "momentum_override_below_ema200"
         base.side = "LONG"
         base.reason = f"ok:{trend_label}"
         return base
