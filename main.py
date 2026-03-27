@@ -1,3 +1,5 @@
+#main.py
+
 from config.env_loader import load_env_file
 from config.live import LiveSettings
 from execution.multi_runner import MultiSymbolTradingSystem
@@ -19,8 +21,9 @@ def build_strategy_config(settings: LiveSettings) -> StrategyConfig:
         trail_atr_mult=settings.strategy_trail_atr_mult,
         cooldown_minutes=settings.cooldown_minutes,
         min_expected_edge=settings.strategy_min_expected_edge,
-        base_long_threshold=0.49,
+        base_long_threshold=0.50,
     )
+
 
 def main():
     load_env_file()
@@ -39,9 +42,10 @@ def main():
                 strategy_config=strategy_cfg,
             )
 
-            # Inject selector/universe settings cleanly
             system.universe.refresh_seconds = settings.universe_refresh_minutes * 60
-            system.universe.selector.top_k = settings.max_active_positions * settings.selector_top_k_multiplier
+            system.universe.selector.top_k = (
+                settings.max_active_positions * settings.selector_top_k_multiplier
+            )
             system.run_loop()
             return
 
