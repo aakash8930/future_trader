@@ -8,7 +8,6 @@ from logs.logger import TradeLogger
 
 def build_strategy_config(settings: LiveSettings) -> StrategyConfig:
     return StrategyConfig(
-        min_prob=settings.strategy_min_prob,
         min_adx=settings.strategy_min_adx,
         min_atr_pct=settings.strategy_min_atr_pct,
         rsi_long_min=settings.strategy_rsi_long_min,
@@ -19,8 +18,10 @@ def build_strategy_config(settings: LiveSettings) -> StrategyConfig:
         take_atr_mult=settings.strategy_take_atr_mult,
         trail_atr_mult=settings.strategy_trail_atr_mult,
         cooldown_minutes=settings.cooldown_minutes,
-        min_expected_edge=-0.0020,  # settings.strategy_min_expected_edge,
-        base_long_threshold=0.46,  # settings.strategy_base_long_threshold,
+
+        # IMPORTANT: keep these tuned
+        min_expected_edge=settings.strategy_min_expected_edge,
+        base_long_threshold=0.50,
     )
 
 
