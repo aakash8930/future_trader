@@ -18,12 +18,9 @@ def build_strategy_config(settings: LiveSettings) -> StrategyConfig:
         take_atr_mult=settings.strategy_take_atr_mult,
         trail_atr_mult=settings.strategy_trail_atr_mult,
         cooldown_minutes=settings.cooldown_minutes,
-
-        # IMPORTANT: keep these tuned
         min_expected_edge=settings.strategy_min_expected_edge,
-        base_long_threshold=0.50,
+        base_long_threshold=0.49,
     )
-
 
 def main():
     load_env_file()
