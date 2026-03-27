@@ -23,7 +23,7 @@ class CoinSelector:
     Design goals:
     - uses only closed candles
     - avoids selecting symbols the runner will almost certainly reject
-    - strongly prefers near-entry long setups
+    - strongly prefers real long structure
     """
 
     DEFAULT_SYMBOLS = [
@@ -170,8 +170,9 @@ class CoinSelector:
             bullish_cross = ema_fast > ema_slow
             rsi_ok = self.rsi_long_min <= rsi <= self.rsi_long_max
             prob_ok = prob_up >= long_th
+
             ema_gap_pct = (price - ema200) / ema200 if ema200 > 0 else -1.0
-            near_recovery = ema_gap_pct >= -0.015
+            near_recovery = ema_gap_pct >= -0.008  # tighter than before
 
             adx_score = min(max(adx, 0.0) / 40.0, 1.0)
             atr_score = min(max(atr_pct, 0.0) / 0.01, 1.0)
@@ -182,6 +183,7 @@ class CoinSelector:
 
             reasons = []
 
+            # Hard reject deep-below-EMA names
             if not above_ema200 and not near_recovery:
                 reasons.append("far_below_ema200")
                 print(
@@ -196,21 +198,23 @@ class CoinSelector:
 
             structure_score = 0.0
             if above_ema200:
-                structure_score += 0.55
-            elif near_recovery:
-                structure_score += 0.20
+                structure_score += 0.62
+            elif near_recovery and bullish_cross and adx >= 22 and rsi >= 48:
+                structure_score += 0.12
+            else:
+                structure_score += 0.02
 
             if bullish_cross:
-                structure_score += 0.20
+                structure_score += 0.18
             if rsi_ok:
-                structure_score += 0.10
+                structure_score += 0.08
             if prob_ok:
-                structure_score += 0.15
+                structure_score += 0.12
 
             penalty = 0.0
 
             if not above_ema200:
-                penalty += 0.12
+                penalty += 0.18
                 reasons.append("below_ema200")
 
             if not bullish_cross:
@@ -226,11 +230,11 @@ class CoinSelector:
                 reasons.append("prob_low")
 
             score = (
-                prob_up * 0.22
+                prob_up * 0.20
                 + adx_score * 0.14
-                + atr_score * 0.14
-                + volume_score * 0.10
-                + structure_score * 0.40
+                + atr_score * 0.12
+                + volume_score * 0.08
+                + structure_score * 0.46
                 - penalty
             )
 
