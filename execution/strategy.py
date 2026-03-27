@@ -1,6 +1,5 @@
 # execution/strategy.py
 
-
 from dataclasses import dataclass, field
 from typing import Optional, List
 import pandas as pd
@@ -14,28 +13,28 @@ class StrategyConfig:
     """Single source of truth for all strategy parameters."""
 
     # Core signal quality
-    min_adx: float = 14.0
-    min_atr_pct: float = 0.0010
-    rsi_long_min: float = 40.0
-    rsi_long_max: float = 70.0
+    min_adx: float = 16.0
+    min_atr_pct: float = 0.0011
+    rsi_long_min: float = 42.0
+    rsi_long_max: float = 68.0
 
     # Threshold handling
-    base_long_threshold: float = 0.49
+    base_long_threshold: float = 0.50
 
     # Risk / reward
-    stop_atr_mult: float = 1.45
-    take_atr_mult: float = 3.2
+    stop_atr_mult: float = 1.40
+    take_atr_mult: float = 3.40
 
     # Trading costs
     fee_pct_per_side: float = 0.0010
     slippage_pct_per_side: float = 0.0008
 
-    # Positive edge only, but not too strict
-    min_expected_edge: float = 0.00005
+    # Positive edge only
+    min_expected_edge: float = 0.00012
 
     # Profit management
-    trail_activate_atr_mult: float = 0.8
-    trail_atr_mult: float = 0.9
+    trail_activate_atr_mult: float = 0.9
+    trail_atr_mult: float = 0.95
 
     # Cooldown
     cooldown_minutes: int = 30
@@ -115,15 +114,15 @@ class StrategyEngine:
         model_th = float(
             getattr(self.model, "long_threshold", self.cfg.base_long_threshold)
         )
-        long_th = min(model_th, self.cfg.base_long_threshold)
+        long_th = max(model_th, self.cfg.base_long_threshold)
 
-        # Relax slightly in stronger trends
-        if adx >= 30:
-            long_th -= 0.02
-        elif adx >= 22:
-            long_th -= 0.01
+        # Relax only a little in strong trends
+        if adx >= 32:
+            long_th -= 0.015
+        elif adx >= 24:
+            long_th -= 0.010
 
-        long_th = max(0.47, min(long_th, 0.58))
+        long_th = max(0.48, min(long_th, 0.58))
 
         stop_loss = price - atr * self.cfg.stop_atr_mult
         take_profit = price + atr * self.cfg.take_atr_mult
@@ -169,12 +168,12 @@ class StrategyEngine:
 
         if above_ema200:
             if not bullish_cross:
-                near_cross = ema_fast >= ema_slow * 0.9985
+                near_cross = ema_fast >= ema_slow * 0.999
                 continuation_override = (
                     near_cross
-                    and adx >= 20
-                    and prob_up >= long_th + 0.006
-                    and ema_gap_pct >= 0.001
+                    and adx >= 22
+                    and prob_up >= long_th + 0.008
+                    and ema_gap_pct >= 0.0015
                 )
                 if not continuation_override:
                     base.reason = (
@@ -183,14 +182,14 @@ class StrategyEngine:
                     )
                     return base
         else:
-            # Controlled recovery entry below EMA200
+            # Make below-EMA recovery entries rare and high-quality only
             momentum_override = (
                 bullish_cross
-                and adx >= 24
-                and prob_up >= long_th + 0.015
-                and rsi >= 48
-                and ema_gap_pct >= -0.008
-                and ema_fast_vs_slow_pct >= 0.0010
+                and adx >= 28
+                and prob_up >= long_th + 0.02
+                and rsi >= 50
+                and ema_gap_pct >= -0.006
+                and ema_fast_vs_slow_pct >= 0.0015
             )
             if not momentum_override:
                 base.reason = (
