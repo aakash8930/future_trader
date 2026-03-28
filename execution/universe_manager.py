@@ -66,8 +66,8 @@ class UniverseManager:
     def refresh_if_needed(self) -> List[str]:
         now = time.time()
 
-        if now - self.last_refresh < self.refresh_seconds and self.active_symbols:
-            return self.active_symbols
+        if now - self.last_refresh < self.refresh_seconds:
+    return self.active_symbols
 
         self.last_refresh = now
 
