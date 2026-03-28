@@ -116,7 +116,7 @@ class StrategyEngine:
         )
         long_th = max(model_th, self.cfg.base_long_threshold)
 
-        # Relax only a little in strong trends
+        # Relax only a little in stronger trends
         if adx >= 32:
             long_th -= 0.015
         elif adx >= 24:
@@ -182,14 +182,14 @@ class StrategyEngine:
                     )
                     return base
         else:
-            # Make below-EMA recovery entries rare and high-quality only
+            # Rare recovery entry below EMA200. This must closely match selector logic.
             momentum_override = (
                 bullish_cross
-                and adx >= 28
-                and prob_up >= long_th + 0.02
-                and rsi >= 50
-                and ema_gap_pct >= -0.006
-                and ema_fast_vs_slow_pct >= 0.0015
+                and adx >= 30
+                and prob_up >= long_th + 0.015
+                and 48.0 <= rsi <= 66.0
+                and ema_gap_pct >= -0.004
+                and ema_fast_vs_slow_pct >= 0.0012
             )
             if not momentum_override:
                 base.reason = (

@@ -172,7 +172,9 @@ class CoinSelector:
             prob_ok = prob_up >= long_th
 
             ema_gap_pct = (price - ema200) / ema200 if ema200 > 0 else -1.0
-            near_recovery = ema_gap_pct >= -0.008  # tighter than before
+            ema_fast_vs_slow_pct = (
+                (ema_fast - ema_slow) / ema_slow if ema_slow > 0 else 0.0
+            )
 
             adx_score = min(max(adx, 0.0) / 40.0, 1.0)
             atr_score = min(max(atr_pct, 0.0) / 0.01, 1.0)
@@ -183,8 +185,18 @@ class CoinSelector:
 
             reasons = []
 
-            # Hard reject deep-below-EMA names
-            if not above_ema200 and not near_recovery:
+            # Only allow below-EMA candidates if they are VERY close to the same
+            # recovery conditions the strategy will accept.
+            recovery_candidate = (
+                bullish_cross
+                and adx >= 30
+                and prob_up >= long_th + 0.015
+                and 48.0 <= rsi <= 66.0
+                and ema_gap_pct >= -0.004
+                and ema_fast_vs_slow_pct >= 0.0012
+            )
+
+            if not above_ema200 and not recovery_candidate:
                 reasons.append("far_below_ema200")
                 print(
                     f"[CoinSelector] {symbol} | "
@@ -198,27 +210,25 @@ class CoinSelector:
 
             structure_score = 0.0
             if above_ema200:
-                structure_score += 0.62
-            elif near_recovery and bullish_cross and adx >= 22 and rsi >= 48:
-                structure_score += 0.12
-            else:
-                structure_score += 0.02
+                structure_score += 0.68
+            elif recovery_candidate:
+                structure_score += 0.18
 
             if bullish_cross:
-                structure_score += 0.18
+                structure_score += 0.14
             if rsi_ok:
                 structure_score += 0.08
             if prob_ok:
-                structure_score += 0.12
+                structure_score += 0.10
 
             penalty = 0.0
 
             if not above_ema200:
-                penalty += 0.18
+                penalty += 0.16
                 reasons.append("below_ema200")
 
             if not bullish_cross:
-                penalty += 0.16
+                penalty += 0.14
                 reasons.append("bearish_cross")
 
             if not rsi_ok:
@@ -230,11 +240,11 @@ class CoinSelector:
                 reasons.append("prob_low")
 
             score = (
-                prob_up * 0.20
-                + adx_score * 0.14
-                + atr_score * 0.12
+                prob_up * 0.18
+                + adx_score * 0.12
+                + atr_score * 0.10
                 + volume_score * 0.08
-                + structure_score * 0.46
+                + structure_score * 0.52
                 - penalty
             )
 
