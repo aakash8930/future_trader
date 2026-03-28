@@ -1,3 +1,5 @@
+#execution/runner.py
+
 import time
 from datetime import datetime, timedelta
 
@@ -69,6 +71,7 @@ class TradingRunner:
         self.cooldown = timedelta(minutes=cooldown_minutes)
         self.last_trade_time: datetime | None = None
         self.last_processed_candle_time: pd.Timestamp | None = None
+        self.last_fetch_wallclock: datetime | None = None
 
         self.last_entry_price: float | None = None
         self.last_entry_prob: float | None = None
@@ -82,7 +85,32 @@ class TradingRunner:
 
         print(f"[AUTONOMOUS AI] {symbol} ready")
 
+    def _should_skip_fetch(self) -> bool:
+        if self.last_fetch_wallclock is None:
+            return False
+
+        elapsed = (datetime.utcnow() - self.last_fetch_wallclock).total_seconds()
+
+        tf = (self.timeframe or "").lower().strip()
+        min_gap_seconds = {
+            "1m": 10,
+            "3m": 20,
+            "5m": 30,
+            "15m": 60,
+            "30m": 90,
+            "1h": 120,
+            "4h": 300,
+            "1d": 900,
+        }.get(tf, 60)
+
+        return elapsed < min_gap_seconds
+
     def run_once(self):
+        if self._should_skip_fetch():
+            return
+
+        self.last_fetch_wallclock = datetime.utcnow()
+
         raw_df = self.data.fetch_ohlcv(self.symbol, self.timeframe, self.lookback + 5)
 
         if raw_df is None:
@@ -98,7 +126,6 @@ class TradingRunner:
 
         self.last_processed_candle_time = closed_candle_time
 
-        # Closed-candle dataframe for signal generation only
         df = raw_df.iloc[:-1].copy()
         df = compute_core_features(df)
 
@@ -131,11 +158,15 @@ class TradingRunner:
         closed_price = float(df.iloc[-1]["close"])
         atr = float(df.iloc[-1]["atr"])
 
-        # Real-time price for open-position management only
-        live_price = self.data.fetch_last_price(self.symbol)
+        live_price = None
+        if hasattr(self.data, "fetch_last_price"):
+            try:
+                live_price = self.data.fetch_last_price(self.symbol)
+            except Exception:
+                live_price = None
+
         manage_price = live_price if live_price is not None else closed_price
 
-        # ---------------- OPEN POSITION MANAGEMENT ----------------
         if self.broker.position:
             if not self._profit_lock_activated and manage_price >= self.take_profit_1:
                 self._profit_lock_activated = True
@@ -163,7 +194,6 @@ class TradingRunner:
 
             return
 
-        # ---------------- ENTRY ----------------
         if self.last_trade_time and datetime.utcnow() - self.last_trade_time < self.cooldown:
             return
 

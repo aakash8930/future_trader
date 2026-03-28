@@ -1,4 +1,4 @@
-# execution/multi_runner.py
+#execution/multi_runner.py
 
 import time
 import json
@@ -31,12 +31,15 @@ class MultiSymbolTradingSystem:
             all_symbols=settings.symbols,
             timeframe=settings.timeframe,
             max_active=settings.max_active_positions,
+            refresh_minutes=settings.universe_refresh_minutes,
+            selector_top_k_multiplier=settings.selector_top_k_multiplier,
+            selector_min_atr_pct=settings.selector_min_atr_pct,
+            selector_soft_min_volume_ratio=settings.selector_soft_min_volume_ratio,
             exchange_name=settings.exchange_name,
             exchange_fallbacks=settings.exchange_fallbacks,
             exchange_timeout_ms=settings.exchange_timeout_ms,
         )
 
-    # ----------------------------------
     def _model_quality_ok(self, symbol: str) -> bool:
         metadata_path = Path("models") / symbol.replace("/", "_") / "metadata.json"
         if not metadata_path.exists():
@@ -54,12 +57,7 @@ class MultiSymbolTradingSystem:
             and float(metrics.get("val_recall", 0.0)) >= self.settings.min_model_val_recall
         )
 
-    # ----------------------------------
     def _filtered_active_symbols(self, symbols: list[str]) -> list[str]:
-        """
-        Apply model-quality gate before runner creation and trading.
-        Prevents bad/weak symbols from staying active and spamming logs.
-        """
         filtered: list[str] = []
 
         for symbol in symbols:
@@ -70,7 +68,6 @@ class MultiSymbolTradingSystem:
 
         return filtered
 
-    # ----------------------------------
     def _ensure_runner(self, symbol: str):
         if symbol in self.runners:
             return
@@ -93,14 +90,12 @@ class MultiSymbolTradingSystem:
         self.runners[symbol] = runner
         print(f"➕ Runner added for {symbol}")
 
-    # ----------------------------------
     def _remove_inactive_runners(self, active_symbols: list[str]):
         inactive = [symbol for symbol in self.runners if symbol not in active_symbols]
         for symbol in inactive:
             del self.runners[symbol]
             print(f"➖ Runner removed for {symbol}")
 
-    # ----------------------------------
     def run_loop(self):
         print(f"🚀 Autonomous trading system started [MODE={self.settings.mode}]")
 
@@ -109,11 +104,10 @@ class MultiSymbolTradingSystem:
                 active_symbols = self.universe.refresh_if_needed()
                 active_symbols = self._filtered_active_symbols(active_symbols)
 
-                # If nothing survives universe + quality gate, stay flat.
                 if not active_symbols:
                     self._remove_inactive_runners([])
                     print("[SYSTEM] no active tradable symbols → flat mode")
-                    time.sleep(self.settings.sleep_seconds)
+                    time.sleep(max(self.settings.sleep_seconds, 120))
                     continue
 
                 for symbol in active_symbols:
