@@ -24,6 +24,7 @@ class CoinSelector:
     - uses only closed candles
     - avoids selecting symbols the runner will almost certainly reject
     - strongly prefers real long structure
+    - keeps selector threshold logic aligned with strategy threshold logic
     """
 
     DEFAULT_SYMBOLS = [
@@ -164,7 +165,15 @@ class CoinSelector:
                 )
                 return None
 
-            prob_up, long_th = self._model_probability_and_threshold(symbol, df)
+            prob_up, model_th = self._model_probability_and_threshold(symbol, df)
+
+            long_th = model_th
+            if adx >= 32:
+                long_th -= 0.015
+            elif adx >= 24:
+                long_th -= 0.010
+
+            long_th = max(0.48, min(long_th, 0.58))
 
             above_ema200 = price > ema200
             bullish_cross = ema_fast > ema_slow
@@ -185,8 +194,6 @@ class CoinSelector:
 
             reasons = []
 
-            # Only allow below-EMA candidates if they are VERY close to the same
-            # recovery conditions the strategy will accept.
             recovery_candidate = (
                 bullish_cross
                 and adx >= 30
@@ -210,7 +217,7 @@ class CoinSelector:
 
             structure_score = 0.0
             if above_ema200:
-                structure_score += 0.68
+                structure_score += 0.58
             elif recovery_candidate:
                 structure_score += 0.18
 
