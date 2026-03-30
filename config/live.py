@@ -1,3 +1,5 @@
+#config/live.py
+
 import os
 from dataclasses import dataclass, field
 
@@ -46,17 +48,16 @@ class LiveSettings:
     lookback: int = 300
 
     # Strategy configuration
-    strategy_min_prob: float = 0.50
-    strategy_min_adx: float = 12.0
-    strategy_min_atr_pct: float = 0.0008
-    strategy_rsi_long_min: float = 40.0
-    strategy_rsi_long_max: float = 75.0
+    strategy_min_adx: float = 16.0
+    strategy_min_atr_pct: float = 0.0011
+    strategy_rsi_long_min: float = 42.0
+    strategy_rsi_long_max: float = 69.0
     strategy_fee_pct_per_side: float = 0.0010
     strategy_slippage_pct_per_side: float = 0.0008
-    strategy_min_expected_edge: float = -0.0020
-    strategy_stop_atr_mult: float = 1.6
-    strategy_take_atr_mult: float = 3.0
-    strategy_trail_atr_mult: float = 1.0
+    strategy_min_expected_edge: float = 0.00012
+    strategy_stop_atr_mult: float = 1.40
+    strategy_take_atr_mult: float = 3.40
+    strategy_trail_atr_mult: float = 0.95
 
     # Universe / selector configuration
     selector_top_k_multiplier: int = 2
@@ -97,17 +98,16 @@ class LiveSettings:
             min_model_val_precision=_env_float("MIN_MODEL_VAL_PRECISION", 0.10),
             min_model_val_recall=_env_float("MIN_MODEL_VAL_RECALL", 0.10),
             lookback=_env_int("LOOKBACK_BARS", 300),
-            strategy_min_prob=_env_float("STRATEGY_MIN_PROB", 0.50),
-            strategy_min_adx=_env_float("STRATEGY_MIN_ADX", 12.0),
-            strategy_min_atr_pct=_env_float("STRATEGY_MIN_ATR_PCT", 0.0008),
-            strategy_rsi_long_min=_env_float("STRATEGY_RSI_LONG_MIN", 40.0),
-            strategy_rsi_long_max=_env_float("STRATEGY_RSI_LONG_MAX", 75.0),
+            strategy_min_adx=_env_float("STRATEGY_MIN_ADX", 16.0),
+            strategy_min_atr_pct=_env_float("STRATEGY_MIN_ATR_PCT", 0.0011),
+            strategy_rsi_long_min=_env_float("STRATEGY_RSI_LONG_MIN", 42.0),
+            strategy_rsi_long_max=_env_float("STRATEGY_RSI_LONG_MAX", 69.0),
             strategy_fee_pct_per_side=_env_float("STRATEGY_FEE_PCT_PER_SIDE", 0.0010),
             strategy_slippage_pct_per_side=_env_float("STRATEGY_SLIPPAGE_PCT_PER_SIDE", 0.0008),
-            strategy_min_expected_edge=_env_float("STRATEGY_MIN_EXPECTED_EDGE", 0.00005),
-            strategy_stop_atr_mult=_env_float("STRATEGY_STOP_ATR_MULT", 1.6),
-            strategy_take_atr_mult=_env_float("STRATEGY_TAKE_ATR_MULT", 3.0),
-            strategy_trail_atr_mult=_env_float("STRATEGY_TRAIL_ATR_MULT", 1.0),
+            strategy_min_expected_edge=_env_float("STRATEGY_MIN_EXPECTED_EDGE", 0.00012),
+            strategy_stop_atr_mult=_env_float("STRATEGY_STOP_ATR_MULT", 1.40),
+            strategy_take_atr_mult=_env_float("STRATEGY_TAKE_ATR_MULT", 3.40),
+            strategy_trail_atr_mult=_env_float("STRATEGY_TRAIL_ATR_MULT", 0.95),
             selector_top_k_multiplier=_env_int("SELECTOR_TOP_K_MULTIPLIER", 2),
             selector_min_atr_pct=_env_float("SELECTOR_MIN_ATR_PCT", 0.0010),
             selector_soft_min_volume_ratio=_env_float("SELECTOR_SOFT_MIN_VOLUME_RATIO", 0.15),
