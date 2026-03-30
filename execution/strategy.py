@@ -1,4 +1,4 @@
-# execution/strategy.py
+#execution/strategy.py
 
 from dataclasses import dataclass, field
 from typing import Optional, List
@@ -12,34 +12,26 @@ from risk.sizing import fixed_fractional_size
 class StrategyConfig:
     """Single source of truth for all strategy parameters."""
 
-    # Core signal quality
     min_adx: float = 16.0
     min_atr_pct: float = 0.0011
     rsi_long_min: float = 42.0
-    rsi_long_max: float = 68.0
+    rsi_long_max: float = 69.0
 
-    # Threshold handling
     base_long_threshold: float = 0.50
 
-    # Risk / reward
     stop_atr_mult: float = 1.40
     take_atr_mult: float = 3.40
 
-    # Trading costs
     fee_pct_per_side: float = 0.0010
     slippage_pct_per_side: float = 0.0008
 
-    # Positive edge only
     min_expected_edge: float = 0.00012
 
-    # Profit management
     trail_activate_atr_mult: float = 0.9
     trail_atr_mult: float = 0.95
 
-    # Cooldown
     cooldown_minutes: int = 30
 
-    # Pyramiding disabled
     max_pyramid_adds: int = 0
     pyramid_trigger_pct: float = 0.005
     pyramid_qty_scales: List[float] = field(
@@ -116,7 +108,6 @@ class StrategyEngine:
         )
         long_th = max(model_th, self.cfg.base_long_threshold)
 
-        # Relax only a little in stronger trends
         if adx >= 32:
             long_th -= 0.015
         elif adx >= 24:
@@ -182,14 +173,13 @@ class StrategyEngine:
                     )
                     return base
         else:
-            # Rare recovery entry below EMA200. This must closely match selector logic.
             momentum_override = (
                 bullish_cross
                 and adx >= 30
-                and prob_up >= long_th + 0.015
-                and 48.0 <= rsi <= 66.0
+                and prob_up >= long_th + 0.02
+                and 50.0 <= rsi <= 66.0
                 and ema_gap_pct >= -0.004
-                and ema_fast_vs_slow_pct >= 0.0012
+                and ema_fast_vs_slow_pct >= 0.0015
             )
             if not momentum_override:
                 base.reason = (
