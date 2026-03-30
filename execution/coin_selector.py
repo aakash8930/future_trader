@@ -23,8 +23,8 @@ class CoinSelector:
     Design goals:
     - uses only closed candles
     - avoids selecting symbols the runner will almost certainly reject
-    - prefers strong above-EMA structure
-    - allows only rare, high-quality recovery setups below EMA200
+    - strongly prefers real long structure
+    - allows below-EMA candidates only when they are very close to strategy acceptance
     """
 
     DEFAULT_SYMBOLS = [
@@ -186,18 +186,13 @@ class CoinSelector:
 
             reasons = []
 
-            # Rare recovery setup below EMA200:
-            # looser than before, but still selective enough to avoid junk picks.
             recovery_candidate = (
                 bullish_cross
-                and prob_up >= long_th + 0.01
-                and 46.0 <= rsi <= 68.0
-                and ema_gap_pct >= -0.010
-                and (
-                    adx >= 22
-                    or (adx >= 18 and volume_ratio >= 1.2)
-                )
-                and ema_fast_vs_slow_pct >= 0.0005
+                and adx >= 30
+                and prob_up >= long_th + 0.015
+                and 48.0 <= rsi <= 66.0
+                and ema_gap_pct >= -0.004
+                and ema_fast_vs_slow_pct >= 0.0012
             )
 
             if not above_ema200 and not recovery_candidate:
@@ -214,7 +209,7 @@ class CoinSelector:
 
             structure_score = 0.0
             if above_ema200:
-                structure_score += 0.66
+                structure_score += 0.68
             elif recovery_candidate:
                 structure_score += 0.18
 
@@ -228,7 +223,7 @@ class CoinSelector:
             penalty = 0.0
 
             if not above_ema200:
-                penalty += 0.14
+                penalty += 0.16
                 reasons.append("below_ema200")
 
             if not bullish_cross:
