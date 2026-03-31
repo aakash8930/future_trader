@@ -12,34 +12,26 @@ from risk.sizing import fixed_fractional_size
 class StrategyConfig:
     """Single source of truth for all strategy parameters."""
 
-    # Core signal quality
     min_adx: float = 16.0
     min_atr_pct: float = 0.0011
     rsi_long_min: float = 42.0
     rsi_long_max: float = 66.0
 
-    # Threshold handling
     base_long_threshold: float = 0.50
 
-    # Risk / reward
     stop_atr_mult: float = 1.40
     take_atr_mult: float = 3.40
 
-    # Trading costs
     fee_pct_per_side: float = 0.0010
     slippage_pct_per_side: float = 0.0008
 
-    # Positive edge only
     min_expected_edge: float = 0.00020
 
-    # Profit management
     trail_activate_atr_mult: float = 0.9
     trail_atr_mult: float = 0.95
 
-    # Cooldown
     cooldown_minutes: int = 30
 
-    # Pyramiding disabled
     max_pyramid_adds: int = 0
     pyramid_trigger_pct: float = 0.005
     pyramid_qty_scales: List[float] = field(
@@ -116,7 +108,6 @@ class StrategyEngine:
         )
         long_th = max(model_th, self.cfg.base_long_threshold)
 
-        # Relax only a little in stronger trends
         if adx >= 36:
             long_th -= 0.010
         elif adx >= 28:
@@ -168,7 +159,7 @@ class StrategyEngine:
 
         if above_ema200:
             if not bullish_cross:
-                near_cross = ema_fast >= ema_slow * 0.999
+                near_cross = ema_fast >= ema_slow * 0.9993
                 continuation_override = (
                     near_cross
                     and adx >= 22
@@ -182,13 +173,12 @@ class StrategyEngine:
                     )
                     return base
         else:
-            # Make below-EMA recovery entries rare and high-quality only
             momentum_override = (
                 bullish_cross
-                and adx >= 28
-                and prob_up >= long_th + 0.02
+                and adx >= 30
+                and prob_up >= long_th + 0.020
                 and rsi >= 50
-                and ema_gap_pct >= -0.006
+                and ema_gap_pct >= -0.0035
                 and ema_fast_vs_slow_pct >= 0.0015
             )
             if not momentum_override:
