@@ -23,7 +23,7 @@ class CoinSelector:
     Design goals:
     - uses only closed candles
     - avoids selecting symbols the runner will almost certainly reject
-    - strongly prefers real long structure
+    - strongly prefers symbols already aligned with strategy rules
     """
 
     DEFAULT_SYMBOLS = [
@@ -164,12 +164,13 @@ class CoinSelector:
                 )
                 return None
 
-            prob_up, long_th = self._model_probability_and_threshold(symbol, df)
+            prob_up, model_long_th = self._model_probability_and_threshold(symbol, df)
+            selector_long_th = max(model_long_th, 0.50)
 
             above_ema200 = price > ema200
             bullish_cross = ema_fast > ema_slow
             rsi_ok = self.rsi_long_min <= rsi <= self.rsi_long_max
-            prob_ok = prob_up >= long_th
+            prob_ok = prob_up >= selector_long_th
 
             ema_gap_pct = (price - ema200) / ema200 if ema200 > 0 else -1.0
             ema_fast_vs_slow_pct = (
@@ -183,22 +184,46 @@ class CoinSelector:
             if volume_ratio < self.soft_min_volume_ratio:
                 volume_score *= 0.35
 
-            reasons = []
+            reasons: list[str] = []
 
+            # Very strict below-EMA candidate filter.
             recovery_candidate = (
                 bullish_cross
                 and adx >= 30
-                and prob_up >= long_th + 0.015
-                and 48.0 <= rsi <= 66.0
-                and ema_gap_pct >= -0.004
-                and ema_fast_vs_slow_pct >= 0.0012
+                and prob_up >= selector_long_th + 0.020
+                and 50.0 <= rsi <= 64.0
+                and ema_gap_pct >= -0.0035
+                and ema_fast_vs_slow_pct >= 0.0015
             )
 
             if not above_ema200 and not recovery_candidate:
                 reasons.append("far_below_ema200")
                 print(
                     f"[CoinSelector] {symbol} | "
-                    f"score=-999.000 prob={prob_up:.3f}/{long_th:.3f} "
+                    f"score=-999.000 prob={prob_up:.3f}/{selector_long_th:.3f} "
+                    f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
+                    f"vol_ratio={volume_ratio:.2f} "
+                    f"above_ema200={above_ema200} bullish_cross={bullish_cross} "
+                    f"reasons={reasons}"
+                )
+                return -999.0
+
+            # Only soft-allow bearish cross when it is genuinely close to flipping.
+            near_cross = ema_fast >= ema_slow * 0.9993
+            continuation_candidate = (
+                above_ema200
+                and not bullish_cross
+                and near_cross
+                and adx >= 22
+                and prob_up >= selector_long_th + 0.008
+                and ema_gap_pct >= 0.0015
+            )
+
+            if above_ema200 and not bullish_cross and not continuation_candidate:
+                reasons.append("bearish_cross_hard_reject")
+                print(
+                    f"[CoinSelector] {symbol} | "
+                    f"score=-999.000 prob={prob_up:.3f}/{selector_long_th:.3f} "
                     f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
                     f"vol_ratio={volume_ratio:.2f} "
                     f"above_ema200={above_ema200} bullish_cross={bullish_cross} "
@@ -208,27 +233,27 @@ class CoinSelector:
 
             structure_score = 0.0
             if above_ema200 and bullish_cross:
-                structure_score += 0.72
-            elif above_ema200:
-                structure_score += 0.46
+                structure_score += 0.78
+            elif continuation_candidate:
+                structure_score += 0.44
             elif recovery_candidate:
-                structure_score += 0.12
+                structure_score += 0.14
 
             if bullish_cross:
-                structure_score += 0.14
-            if rsi_ok:
-                structure_score += 0.08
-            if prob_ok:
                 structure_score += 0.10
+            if rsi_ok:
+                structure_score += 0.06
+            if prob_ok:
+                structure_score += 0.08
 
             penalty = 0.0
 
             if not above_ema200:
-                penalty += 0.16
+                penalty += 0.14
                 reasons.append("below_ema200")
 
             if not bullish_cross:
-                penalty += 0.24
+                penalty += 0.18
                 reasons.append("bearish_cross")
 
             if not rsi_ok:
@@ -240,17 +265,17 @@ class CoinSelector:
                 reasons.append("prob_low")
 
             score = (
-                prob_up * 0.18
+                prob_up * 0.16
                 + adx_score * 0.12
                 + atr_score * 0.10
                 + volume_score * 0.08
-                + structure_score * 0.52
+                + structure_score * 0.54
                 - penalty
             )
 
             print(
                 f"[CoinSelector] {symbol} | "
-                f"score={score:.3f} prob={prob_up:.3f}/{long_th:.3f} "
+                f"score={score:.3f} prob={prob_up:.3f}/{selector_long_th:.3f} "
                 f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
                 f"vol_ratio={volume_ratio:.2f} "
                 f"above_ema200={above_ema200} bullish_cross={bullish_cross} "
