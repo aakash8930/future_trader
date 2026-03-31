@@ -24,7 +24,6 @@ class CoinSelector:
     - uses only closed candles
     - avoids selecting symbols the runner will almost certainly reject
     - strongly prefers real long structure
-    - allows below-EMA candidates only when they are very close to strategy acceptance
     """
 
     DEFAULT_SYMBOLS = [
@@ -208,10 +207,12 @@ class CoinSelector:
                 return -999.0
 
             structure_score = 0.0
-            if above_ema200:
-                structure_score += 0.68
+            if above_ema200 and bullish_cross:
+                structure_score += 0.72
+            elif above_ema200:
+                structure_score += 0.46
             elif recovery_candidate:
-                structure_score += 0.18
+                structure_score += 0.12
 
             if bullish_cross:
                 structure_score += 0.14
@@ -227,7 +228,7 @@ class CoinSelector:
                 reasons.append("below_ema200")
 
             if not bullish_cross:
-                penalty += 0.14
+                penalty += 0.24
                 reasons.append("bearish_cross")
 
             if not rsi_ok:
