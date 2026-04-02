@@ -1,5 +1,6 @@
 #execution/strategy.py
 
+
 from dataclasses import dataclass, field
 from typing import Optional, List
 import pandas as pd
@@ -12,26 +13,34 @@ from risk.sizing import fixed_fractional_size
 class StrategyConfig:
     """Single source of truth for all strategy parameters."""
 
-    min_adx: float = 16.0
+    # Core signal quality
+    min_adx: float = 22.0
     min_atr_pct: float = 0.0011
-    rsi_long_min: float = 42.0
-    rsi_long_max: float = 66.0
+    rsi_long_min: float = 45.0
+    rsi_long_max: float = 64.0
 
+    # Threshold handling
     base_long_threshold: float = 0.50
 
-    stop_atr_mult: float = 1.40
-    take_atr_mult: float = 3.40
+    # Risk / reward
+    stop_atr_mult: float = 1.30
+    take_atr_mult: float = 3.80
 
+    # Trading costs
     fee_pct_per_side: float = 0.0010
     slippage_pct_per_side: float = 0.0008
 
+    # Positive edge only
     min_expected_edge: float = 0.00020
 
-    trail_activate_atr_mult: float = 0.9
-    trail_atr_mult: float = 0.95
+    # Profit management
+    trail_activate_atr_mult: float = 1.0
+    trail_atr_mult: float = 1.0
 
+    # Cooldown
     cooldown_minutes: int = 30
 
+    # Pyramiding disabled
     max_pyramid_adds: int = 0
     pyramid_trigger_pct: float = 0.005
     pyramid_qty_scales: List[float] = field(
@@ -108,12 +117,13 @@ class StrategyEngine:
         )
         long_th = max(model_th, self.cfg.base_long_threshold)
 
-        if adx >= 36:
+        # Slight relaxation only in stronger trends
+        if adx >= 38:
             long_th -= 0.010
-        elif adx >= 28:
+        elif adx >= 30:
             long_th -= 0.005
 
-        long_th = max(0.48, min(long_th, 0.58))
+        long_th = max(0.49, min(long_th, 0.58))
 
         stop_loss = price - atr * self.cfg.stop_atr_mult
         take_profit = price + atr * self.cfg.take_atr_mult
@@ -150,6 +160,11 @@ class StrategyEngine:
             )
             return base
 
+        # Strong-trend-only block
+        if adx < 22.0:
+            base.reason = f"weak_trend_block({adx:.1f}<22.0)"
+            return base
+
         above_ema200 = price > ema200
         bullish_cross = ema_fast > ema_slow
         ema_gap_pct = (price - ema200) / ema200 if ema200 > 0 else 0.0
@@ -159,12 +174,12 @@ class StrategyEngine:
 
         if above_ema200:
             if not bullish_cross:
-                near_cross = ema_fast >= ema_slow * 0.9993
+                near_cross = ema_fast >= ema_slow * 0.999
                 continuation_override = (
                     near_cross
-                    and adx >= 22
-                    and prob_up >= long_th + 0.008
-                    and ema_gap_pct >= 0.0015
+                    and adx >= 26
+                    and prob_up >= long_th + 0.010
+                    and ema_gap_pct >= 0.0020
                 )
                 if not continuation_override:
                     base.reason = (
@@ -173,13 +188,14 @@ class StrategyEngine:
                     )
                     return base
         else:
+            # Rare, high-quality recovery entries only
             momentum_override = (
                 bullish_cross
-                and adx >= 30
-                and prob_up >= long_th + 0.020
+                and adx >= 32
+                and prob_up >= long_th + 0.025
                 and rsi >= 50
-                and ema_gap_pct >= -0.0035
-                and ema_fast_vs_slow_pct >= 0.0015
+                and ema_gap_pct >= -0.004
+                and ema_fast_vs_slow_pct >= 0.0018
             )
             if not momentum_override:
                 base.reason = (
