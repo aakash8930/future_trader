@@ -1,5 +1,3 @@
-#execution/coin_selector.py
-
 import os
 import numpy as np
 
@@ -186,14 +184,15 @@ class CoinSelector:
 
             reasons: list[str] = []
 
-            # Very strict below-EMA candidate filter.
+            # Slightly relaxed recovery candidate to avoid staying flat forever,
+            # but still much stricter than normal above-EMA entries.
             recovery_candidate = (
                 bullish_cross
-                and adx >= 30
-                and prob_up >= selector_long_th + 0.020
-                and 50.0 <= rsi <= 64.0
-                and ema_gap_pct >= -0.0035
-                and ema_fast_vs_slow_pct >= 0.0015
+                and adx >= 26
+                and prob_up >= selector_long_th + 0.012
+                and 48.0 <= rsi <= 64.0
+                and ema_gap_pct >= -0.006
+                and ema_fast_vs_slow_pct >= 0.0010
             )
 
             if not above_ema200 and not recovery_candidate:
@@ -208,7 +207,6 @@ class CoinSelector:
                 )
                 return -999.0
 
-            # Only soft-allow bearish cross when it is genuinely close to flipping.
             near_cross = ema_fast >= ema_slow * 0.9993
             continuation_candidate = (
                 above_ema200
@@ -237,7 +235,7 @@ class CoinSelector:
             elif continuation_candidate:
                 structure_score += 0.44
             elif recovery_candidate:
-                structure_score += 0.14
+                structure_score += 0.20
 
             if bullish_cross:
                 structure_score += 0.10
@@ -249,7 +247,7 @@ class CoinSelector:
             penalty = 0.0
 
             if not above_ema200:
-                penalty += 0.14
+                penalty += 0.12
                 reasons.append("below_ema200")
 
             if not bullish_cross:
