@@ -41,8 +41,8 @@ class CoinSelector:
         top_k: int = 4,
         min_atr_pct: float = 0.001,
         soft_min_volume_ratio: float = 0.15,
-        rsi_long_min: float = 40.0,
-        rsi_long_max: float = 75.0,
+        rsi_long_min: float = 45.0,
+        rsi_long_max: float = 64.0,
         exchange_name: str = "binance",
         exchange_fallbacks: list[str] | None = None,
         exchange_timeout_ms: int = 20000,
@@ -184,13 +184,11 @@ class CoinSelector:
 
             reasons: list[str] = []
 
-            # Slightly relaxed recovery candidate to avoid staying flat forever,
-            # but still much stricter than normal above-EMA entries.
             recovery_candidate = (
                 bullish_cross
                 and adx >= 26
                 and prob_up >= selector_long_th + 0.012
-                and 48.0 <= rsi <= 64.0
+                and self.rsi_long_min <= rsi <= self.rsi_long_max
                 and ema_gap_pct >= -0.006
                 and ema_fast_vs_slow_pct >= 0.0010
             )
@@ -255,7 +253,7 @@ class CoinSelector:
                 reasons.append("bearish_cross")
 
             if not rsi_ok:
-                penalty += 0.10
+                penalty += 0.12
                 reasons.append("rsi_bad")
 
             if not prob_ok:
