@@ -39,7 +39,7 @@ class CoinSelector:
         timeframe: str = "15m",
         lookback: int = 240,
         top_k: int = 4,
-        min_atr_pct: float = 0.001,
+        min_atr_pct: float = 0.0008,
         soft_min_volume_ratio: float = 0.15,
         rsi_long_min: float = 45.0,
         rsi_long_max: float = 64.0,
@@ -165,6 +165,17 @@ class CoinSelector:
             prob_up, model_long_th = self._model_probability_and_threshold(symbol, df)
             selector_long_th = max(model_long_th, 0.50)
 
+            # Extra early reject for very weak model confidence.
+            if prob_up < 0.45:
+                print(
+                    f"[CoinSelector] {symbol} | "
+                    f"score=-999.000 prob={prob_up:.3f}/{selector_long_th:.3f} "
+                    f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
+                    f"vol_ratio={volume_ratio:.2f} "
+                    f"reasons=['prob_too_low']"
+                )
+                return -999.0
+
             above_ema200 = price > ema200
             bullish_cross = ema_fast > ema_slow
             rsi_ok = self.rsi_long_min <= rsi <= self.rsi_long_max
@@ -234,6 +245,10 @@ class CoinSelector:
                 structure_score += 0.44
             elif recovery_candidate:
                 structure_score += 0.20
+            elif above_ema200 and adx >= 18:
+                # Soft-trend allowance to avoid missing early trend continuation.
+                structure_score += 0.18
+                reasons.append("soft_trend")
 
             if bullish_cross:
                 structure_score += 0.10
