@@ -194,14 +194,16 @@ class CoinSelector:
 
             reasons: list[str] = []
 
-            # Below-EMA names must look like true recovery setups.
+            # Tightened recovery logic so below-EMA picks are much closer
+            # to what the strategy will actually trade.
             recovery_candidate = (
                 bullish_cross
-                and adx >= 26
-                and prob_up >= selector_long_th + 0.012
+                and adx >= 28
+                and prob_up >= selector_long_th + 0.020
                 and rsi_ok
+                and rsi >= 50.0
                 and ema_gap_pct >= -0.006
-                and ema_fast_vs_slow_pct >= 0.0010
+                and ema_fast_vs_slow_pct >= 0.0015
             )
 
             if not above_ema200 and not recovery_candidate:
