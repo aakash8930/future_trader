@@ -170,8 +170,7 @@ class CoinSelector:
                     f"[CoinSelector] {symbol} | "
                     f"score=-999.000 prob={prob_up:.3f}/{selector_long_th:.3f} "
                     f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
-                    f"vol_ratio={volume_ratio:.2f} "
-                    f"reasons=['prob_too_low']"
+                    f"vol_ratio={volume_ratio:.2f} reasons=['prob_too_low']"
                 )
                 return -999.0
 
@@ -179,6 +178,7 @@ class CoinSelector:
             bullish_cross = ema_fast > ema_slow
             rsi_ok = self.rsi_long_min <= rsi <= self.rsi_long_max
             prob_ok = prob_up >= selector_long_th
+            adx_ok = adx >= 22.0
 
             ema_gap_pct = (price - ema200) / ema200 if ema200 > 0 else -1.0
             ema_fast_vs_slow_pct = (
@@ -194,6 +194,7 @@ class CoinSelector:
 
             reasons: list[str] = []
 
+            # Below-EMA names must look like true recovery setups.
             recovery_candidate = (
                 bullish_cross
                 and adx >= 26
@@ -220,9 +221,10 @@ class CoinSelector:
                 above_ema200
                 and not bullish_cross
                 and near_cross
-                and adx >= 22
+                and adx_ok
                 and prob_up >= selector_long_th + 0.008
                 and ema_gap_pct >= 0.0015
+                and rsi_ok
             )
 
             if above_ema200 and not bullish_cross and not continuation_candidate:
@@ -237,23 +239,58 @@ class CoinSelector:
                 )
                 return -999.0
 
+            # Hard-align with strategy for above-EMA selections.
+            if above_ema200 and bullish_cross:
+                if not adx_ok:
+                    reasons.append("adx_low")
+                    print(
+                        f"[CoinSelector] {symbol} | "
+                        f"score=-999.000 prob={prob_up:.3f}/{selector_long_th:.3f} "
+                        f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
+                        f"vol_ratio={volume_ratio:.2f} "
+                        f"above_ema200={above_ema200} bullish_cross={bullish_cross} "
+                        f"reasons={reasons}"
+                    )
+                    return -999.0
+
+                if not rsi_ok:
+                    reasons.append("rsi_bad")
+                    print(
+                        f"[CoinSelector] {symbol} | "
+                        f"score=-999.000 prob={prob_up:.3f}/{selector_long_th:.3f} "
+                        f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
+                        f"vol_ratio={volume_ratio:.2f} "
+                        f"above_ema200={above_ema200} bullish_cross={bullish_cross} "
+                        f"reasons={reasons}"
+                    )
+                    return -999.0
+
+                if not prob_ok:
+                    reasons.append("prob_low")
+                    print(
+                        f"[CoinSelector] {symbol} | "
+                        f"score=-999.000 prob={prob_up:.3f}/{selector_long_th:.3f} "
+                        f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
+                        f"vol_ratio={volume_ratio:.2f} "
+                        f"above_ema200={above_ema200} bullish_cross={bullish_cross} "
+                        f"reasons={reasons}"
+                    )
+                    return -999.0
+
             structure_score = 0.0
             if above_ema200 and bullish_cross:
-                structure_score += 0.78
+                structure_score += 0.82
             elif continuation_candidate:
-                structure_score += 0.44
+                structure_score += 0.46
             elif recovery_candidate:
-                structure_score += 0.20
-            elif above_ema200 and adx >= 18 and rsi_ok:
-                structure_score += 0.18
-                reasons.append("soft_trend")
+                structure_score += 0.22
 
             if bullish_cross:
-                structure_score += 0.10
-            if rsi_ok:
-                structure_score += 0.06
-            if prob_ok:
                 structure_score += 0.08
+            if rsi_ok:
+                structure_score += 0.05
+            if prob_ok:
+                structure_score += 0.07
 
             penalty = 0.0
 
