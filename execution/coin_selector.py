@@ -19,9 +19,10 @@ class CoinSelector:
     Scores symbols for live trading.
 
     Design goals:
-    - uses only closed candles
-    - avoids selecting symbols the runner will almost certainly reject
-    - strongly prefers symbols already aligned with strategy rules
+    - use only closed candles
+    - avoid selecting symbols the runner will almost certainly reject
+    - prefer symbols already aligned with strategy rules
+    - allow strong-trend overrides so the system does not become too idle
     """
 
     DEFAULT_SYMBOLS = [
@@ -177,8 +178,10 @@ class CoinSelector:
             above_ema200 = price > ema200
             bullish_cross = ema_fast > ema_slow
             rsi_ok = self.rsi_long_min <= rsi <= self.rsi_long_max
-            prob_ok = prob_up >= selector_long_th
             adx_ok = adx >= 22.0
+
+            prob_buffer = 0.015
+            prob_ok = prob_up >= (selector_long_th - prob_buffer)
 
             ema_gap_pct = (price - ema200) / ema200 if ema200 > 0 else -1.0
             ema_fast_vs_slow_pct = (
@@ -187,18 +190,23 @@ class CoinSelector:
 
             adx_score = min(max(adx, 0.0) / 40.0, 1.0)
             atr_score = min(max(atr_pct, 0.0) / 0.01, 1.0)
-
             volume_score = min(max(volume_ratio, 0.0) / 1.5, 1.0)
             if volume_ratio < self.soft_min_volume_ratio:
                 volume_score *= 0.35
 
             reasons: list[str] = []
 
-            # Tightened recovery logic so below-EMA picks are much closer
-            # to what the strategy will actually trade.
+            strong_trend_override = (
+                above_ema200
+                and bullish_cross
+                and adx >= 35.0
+                and rsi >= 48.0
+                and prob_up >= 0.48
+            )
+
             recovery_candidate = (
                 bullish_cross
-                and adx >= 28
+                and adx >= 28.0
                 and prob_up >= selector_long_th + 0.020
                 and rsi_ok
                 and rsi >= 50.0
@@ -218,13 +226,13 @@ class CoinSelector:
                 )
                 return -999.0
 
-            near_cross = ema_fast >= ema_slow * 0.9993
+            near_cross = ema_fast >= ema_slow * 0.997
             continuation_candidate = (
                 above_ema200
                 and not bullish_cross
+                and adx >= 28.0
+                and prob_up >= selector_long_th + 0.010
                 and near_cross
-                and adx_ok
-                and prob_up >= selector_long_th + 0.008
                 and ema_gap_pct >= 0.0015
                 and rsi_ok
             )
@@ -241,9 +249,8 @@ class CoinSelector:
                 )
                 return -999.0
 
-            # Hard-align with strategy for above-EMA selections.
             if above_ema200 and bullish_cross:
-                if not adx_ok:
+                if not adx_ok and not strong_trend_override:
                     reasons.append("adx_low")
                     print(
                         f"[CoinSelector] {symbol} | "
@@ -267,7 +274,7 @@ class CoinSelector:
                     )
                     return -999.0
 
-                if not prob_ok:
+                if not prob_ok and not strong_trend_override:
                     reasons.append("prob_low")
                     print(
                         f"[CoinSelector] {symbol} | "
@@ -291,7 +298,7 @@ class CoinSelector:
                 structure_score += 0.08
             if rsi_ok:
                 structure_score += 0.05
-            if prob_ok:
+            if prob_ok or strong_trend_override:
                 structure_score += 0.07
 
             penalty = 0.0
@@ -308,7 +315,7 @@ class CoinSelector:
                 penalty += 0.18
                 reasons.append("rsi_bad")
 
-            if not prob_ok:
+            if not prob_ok and not strong_trend_override:
                 penalty += 0.08
                 reasons.append("prob_low")
 
