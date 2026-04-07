@@ -196,11 +196,12 @@ class CoinSelector:
 
             reasons: list[str] = []
 
+            # Strong trend override should still respect RSI band.
             strong_trend_override = (
                 above_ema200
                 and bullish_cross
                 and adx >= 35.0
-                and rsi >= 48.0
+                and rsi_ok
                 and prob_up >= 0.48
             )
 
@@ -327,6 +328,16 @@ class CoinSelector:
                 + structure_score * 0.54
                 - penalty
             )
+
+            # Final guard so selector can never pass an invalid RSI symbol as "ok".
+            if above_ema200 and bullish_cross and not rsi_ok:
+                print(
+                    f"[CoinSelector] {symbol} | "
+                    f"score=-999.000 prob={prob_up:.3f}/{selector_long_th:.3f} "
+                    f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
+                    f"vol_ratio={volume_ratio:.2f} reasons=['rsi_bad_final_guard']"
+                )
+                return -999.0
 
             print(
                 f"[CoinSelector] {symbol} | "
