@@ -42,8 +42,8 @@ class CoinSelector:
         top_k: int = 4,
         min_atr_pct: float = 0.0008,
         soft_min_volume_ratio: float = 0.15,
-        rsi_long_min: float = 45.0,
-        rsi_long_max: float = 64.0,
+        rsi_long_min: float = 40.0,
+        rsi_long_max: float = 76.0,
         exchange_name: str = "binance",
         exchange_fallbacks: list[str] | None = None,
         exchange_timeout_ms: int = 20000,
@@ -89,271 +89,173 @@ class CoinSelector:
 
     def _score_symbol(self, symbol: str) -> float | None:
         try:
-            raw_fetch_limit = max(self.lookback + 80, 320)
-
-            raw_df = self.fetcher.fetch_ohlcv(
-                symbol,
-                self.timeframe,
-                limit=raw_fetch_limit,
-            )
-
-            if raw_df is None:
+            raw_fetch_limit = max(self.lookback + 220, 420)
+            df = self.fetcher.fetch_ohlcv(symbol, self.timeframe, limit=raw_fetch_limit)
+            if df is None or df.empty or len(df) < self.lookback:
+                print(f"[CoinSelector] {symbol} | insufficient_data")
                 return None
 
-            if len(raw_df) < 260:
-                print(
-                    f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
-                    f"insufficient raw data ({len(raw_df)} rows)"
-                )
+            # Use only historical closed candles for selection.
+            df = df.iloc[:-1].copy()
+            if len(df) < self.lookback:
+                print(f"[CoinSelector] {symbol} | insufficient_closed_candles")
                 return None
 
-            df = raw_df.iloc[:-1].copy()
             df = compute_core_features(df)
-
-            if df.empty or len(df) < 50:
-                print(
-                    f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
-                    f"feature window too small ({len(df)} rows)"
-                )
+            df = df.dropna().copy()
+            if df.empty:
+                print(f"[CoinSelector] {symbol} | no_features_after_dropna")
                 return None
 
-            last = df.iloc[-1]
-            price = float(last["close"])
-            adx = float(last["adx"])
-            atr_pct = float(last["atr_pct"])
-            ema_fast = float(last["ema_fast"])
-            ema_slow = float(last["ema_slow"])
-            ema200 = float(last["ema200"])
-            rsi = float(last["rsi"])
+            row = df.iloc[-1]
 
-            vol_series = df["volume"].replace([np.inf, -np.inf], np.nan).dropna()
-            if len(vol_series) < 30:
-                print(
-                    f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
-                    f"not enough clean volume data"
-                )
+            price = float(row["close"])
+            ema200 = float(row["ema200"])
+            ema_fast = float(row["ema_fast"])
+            ema_slow = float(row["ema_slow"])
+            adx = float(row["adx"])
+            atr_pct = float(row["atr_pct"])
+            rsi = float(row["rsi"])
+            dist_ema200 = float(row["dist_ema200"])
+
+            if not np.isfinite(price) or price <= 0:
+                print(f"[CoinSelector] {symbol} | invalid_price")
                 return None
 
-            recent_window = vol_series.tail(3)
-            baseline_window = vol_series.iloc[-23:-3]
-
-            if len(baseline_window) < 10:
-                print(
-                    f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
-                    f"baseline volume window too small"
-                )
+            if not np.isfinite(ema200) or ema200 <= 0:
+                print(f"[CoinSelector] {symbol} | invalid_ema200")
                 return None
 
-            recent_vol = float(recent_window.median())
-            baseline_vol = float(baseline_window.median())
+            if not np.isfinite(adx):
+                adx = 0.0
+            if not np.isfinite(atr_pct):
+                atr_pct = 0.0
+            if not np.isfinite(rsi):
+                rsi = 50.0
+            if not np.isfinite(dist_ema200):
+                dist_ema200 = 0.0
 
-            if recent_vol <= 0 or baseline_vol <= 0:
-                print(
-                    f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
-                    f"invalid volume data (recent={recent_vol:.2f}, base={baseline_vol:.2f})"
-                )
-                return None
+            vol_ratio = 1.0
+            if "volume" in df.columns:
+                vol_ma = float(df["volume"].rolling(20).mean().iloc[-1])
+                cur_vol = float(row["volume"])
+                if np.isfinite(vol_ma) and vol_ma > 0 and np.isfinite(cur_vol):
+                    vol_ratio = cur_vol / vol_ma
 
-            volume_ratio = recent_vol / baseline_vol
-
-            if atr_pct < self.min_atr_pct:
-                print(
-                    f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
-                    f"atr_pct too low ({atr_pct:.4f})"
-                )
-                return None
+            bullish_cross = ema_fast > ema_slow
+            above_ema200 = price > ema200
 
             prob_up, model_long_th = self._model_probability_and_threshold(symbol, df)
-            selector_long_th = max(model_long_th, 0.50)
 
-            if prob_up < 0.45:
-                print(
-                    f"[CoinSelector] {symbol} | "
-                    f"score=-999.000 prob={prob_up:.3f}/{selector_long_th:.3f} "
-                    f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
-                    f"vol_ratio={volume_ratio:.2f} reasons=['prob_too_low']"
-                )
-                return -999.0
+            # Slightly more permissive than before.
+            # Previous logs show many good trend symbols dying on RSI and strict thresholds.
+            adaptive_long_th = max(0.48, model_long_th - 0.01)
 
-            above_ema200 = price > ema200
-            bullish_cross = ema_fast > ema_slow
-            rsi_ok = self.rsi_long_min <= rsi <= self.rsi_long_max
-            adx_ok = adx >= 22.0
-
-            prob_buffer = 0.015
-            prob_ok = prob_up >= (selector_long_th - prob_buffer)
-
-            ema_gap_pct = (price - ema200) / ema200 if ema200 > 0 else -1.0
-            ema_fast_vs_slow_pct = (
-                (ema_fast - ema_slow) / ema_slow if ema_slow > 0 else 0.0
+            strong_trend = (
+                above_ema200
+                and bullish_cross
+                and adx >= 26.0
+                and atr_pct >= self.min_atr_pct
             )
 
-            adx_score = min(max(adx, 0.0) / 40.0, 1.0)
-            atr_score = min(max(atr_pct, 0.0) / 0.01, 1.0)
-            volume_score = min(max(volume_ratio, 0.0) / 1.5, 1.0)
-            if volume_ratio < self.soft_min_volume_ratio:
-                volume_score *= 0.35
+            momentum_override = (
+                bullish_cross
+                and adx >= 30.0
+                and atr_pct >= max(self.min_atr_pct, 0.0010)
+                and prob_up >= adaptive_long_th + 0.01
+                and dist_ema200 > -0.020
+            )
 
             reasons: list[str] = []
 
-            # Strong trend override should still respect RSI band.
-            strong_trend_override = (
-                above_ema200
-                and bullish_cross
-                and adx >= 35.0
-                and rsi_ok
-                and prob_up >= 0.48
-            )
+            # Hard rejects only for clearly bad cases.
+            if atr_pct < self.min_atr_pct * 0.80:
+                reasons.append("atr_too_low")
 
-            recovery_candidate = (
-                bullish_cross
-                and adx >= 28.0
-                and prob_up >= selector_long_th + 0.020
-                and rsi_ok
-                and rsi >= 50.0
-                and ema_gap_pct >= -0.006
-                and ema_fast_vs_slow_pct >= 0.0015
-            )
+            if vol_ratio < self.soft_min_volume_ratio * 0.60:
+                reasons.append("volume_too_low")
 
-            if not above_ema200 and not recovery_candidate:
+            if prob_up < adaptive_long_th - 0.035:
+                reasons.append("prob_too_low")
+
+            if not above_ema200 and dist_ema200 <= -0.035 and not momentum_override:
                 reasons.append("far_below_ema200")
-                print(
-                    f"[CoinSelector] {symbol} | "
-                    f"score=-999.000 prob={prob_up:.3f}/{selector_long_th:.3f} "
-                    f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
-                    f"vol_ratio={volume_ratio:.2f} "
-                    f"above_ema200={above_ema200} bullish_cross={bullish_cross} "
-                    f"reasons={reasons}"
-                )
-                return -999.0
 
-            near_cross = ema_fast >= ema_slow * 0.997
-            continuation_candidate = (
-                above_ema200
-                and not bullish_cross
-                and adx >= 28.0
-                and prob_up >= selector_long_th + 0.010
-                and near_cross
-                and ema_gap_pct >= 0.0015
-                and rsi_ok
-            )
+            # RSI handling:
+            # - keep lower bound
+            # - relax upper bound in strong trends
+            rsi_upper = self.rsi_long_max
+            if strong_trend:
+                rsi_upper = max(rsi_upper, 82.0)
+            elif adx >= 32.0 and above_ema200 and bullish_cross:
+                rsi_upper = max(rsi_upper, 80.0)
 
-            if above_ema200 and not bullish_cross and not continuation_candidate:
-                reasons.append("bearish_cross_hard_reject")
-                print(
-                    f"[CoinSelector] {symbol} | "
-                    f"score=-999.000 prob={prob_up:.3f}/{selector_long_th:.3f} "
-                    f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
-                    f"vol_ratio={volume_ratio:.2f} "
-                    f"above_ema200={above_ema200} bullish_cross={bullish_cross} "
-                    f"reasons={reasons}"
-                )
-                return -999.0
-
-            if above_ema200 and bullish_cross:
-                if not adx_ok and not strong_trend_override:
-                    reasons.append("adx_low")
-                    print(
-                        f"[CoinSelector] {symbol} | "
-                        f"score=-999.000 prob={prob_up:.3f}/{selector_long_th:.3f} "
-                        f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
-                        f"vol_ratio={volume_ratio:.2f} "
-                        f"above_ema200={above_ema200} bullish_cross={bullish_cross} "
-                        f"reasons={reasons}"
-                    )
-                    return -999.0
-
-                if not rsi_ok:
-                    reasons.append("rsi_bad")
-                    print(
-                        f"[CoinSelector] {symbol} | "
-                        f"score=-999.000 prob={prob_up:.3f}/{selector_long_th:.3f} "
-                        f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
-                        f"vol_ratio={volume_ratio:.2f} "
-                        f"above_ema200={above_ema200} bullish_cross={bullish_cross} "
-                        f"reasons={reasons}"
-                    )
-                    return -999.0
-
-                if not prob_ok and not strong_trend_override:
-                    reasons.append("prob_low")
-                    print(
-                        f"[CoinSelector] {symbol} | "
-                        f"score=-999.000 prob={prob_up:.3f}/{selector_long_th:.3f} "
-                        f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
-                        f"vol_ratio={volume_ratio:.2f} "
-                        f"above_ema200={above_ema200} bullish_cross={bullish_cross} "
-                        f"reasons={reasons}"
-                    )
-                    return -999.0
-
-            structure_score = 0.0
-            if above_ema200 and bullish_cross:
-                structure_score += 0.82
-            elif continuation_candidate:
-                structure_score += 0.46
-            elif recovery_candidate:
-                structure_score += 0.22
-
-            if bullish_cross:
-                structure_score += 0.08
-            if rsi_ok:
-                structure_score += 0.05
-            if prob_ok or strong_trend_override:
-                structure_score += 0.07
-
-            penalty = 0.0
-
-            if not above_ema200:
-                penalty += 0.12
-                reasons.append("below_ema200")
-
-            if not bullish_cross:
-                penalty += 0.18
-                reasons.append("bearish_cross")
-
-            if not rsi_ok:
-                penalty += 0.18
+            if rsi < self.rsi_long_min:
+                reasons.append("rsi_too_low")
+            elif rsi > rsi_upper:
                 reasons.append("rsi_bad")
 
-            if not prob_ok and not strong_trend_override:
-                penalty += 0.08
-                reasons.append("prob_low")
-
-            score = (
-                prob_up * 0.16
-                + adx_score * 0.12
-                + atr_score * 0.10
-                + volume_score * 0.08
-                + structure_score * 0.54
-                - penalty
-            )
-
-            # Final guard so selector can never pass an invalid RSI symbol as "ok".
-            if above_ema200 and bullish_cross and not rsi_ok:
+            if reasons:
                 print(
                     f"[CoinSelector] {symbol} | "
-                    f"score=-999.000 prob={prob_up:.3f}/{selector_long_th:.3f} "
-                    f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
-                    f"vol_ratio={volume_ratio:.2f} reasons=['rsi_bad_final_guard']"
+                    f"score=-999.000 "
+                    f"prob={prob_up:.3f}/{adaptive_long_th:.3f} "
+                    f"adx={adx:.1f} atr_pct={atr_pct:.4f} "
+                    f"rsi={rsi:.1f} vol_ratio={vol_ratio:.2f} "
+                    f"above_ema200={above_ema200} bullish_cross={bullish_cross} "
+                    f"reasons={reasons}"
                 )
                 return -999.0
+
+            # Soft score:
+            # probability matters most, then regime alignment, then momentum/liquidity.
+            score = 0.0
+            score += prob_up * 0.95
+            score += min(adx, 50.0) / 100.0
+            score += min(atr_pct, 0.0100) * 18.0
+            score += min(max(vol_ratio, 0.0), 3.0) * 0.04
+
+            if above_ema200:
+                score += 0.12
+            else:
+                score -= 0.06
+
+            if bullish_cross:
+                score += 0.08
+
+            if strong_trend:
+                score += 0.06
+
+            if momentum_override and not above_ema200:
+                score += 0.03
+
+            # Mild penalty for late/extreme RSI, but no automatic rejection.
+            if rsi > 72.0:
+                score -= min((rsi - 72.0) * 0.006, 0.08)
+
+            score = float(max(score, 0.0))
+
+            reason = "ok"
+            if momentum_override and not above_ema200:
+                reason = "ok_momentum_override"
+            elif strong_trend:
+                reason = "ok_strong_trend"
 
             print(
                 f"[CoinSelector] {symbol} | "
-                f"score={score:.3f} prob={prob_up:.3f}/{selector_long_th:.3f} "
-                f"adx={adx:.1f} atr_pct={atr_pct:.4f} rsi={rsi:.1f} "
-                f"vol_ratio={volume_ratio:.2f} "
+                f"score={score:.3f} "
+                f"prob={prob_up:.3f}/{adaptive_long_th:.3f} "
+                f"adx={adx:.1f} atr_pct={atr_pct:.4f} "
+                f"rsi={rsi:.1f} vol_ratio={vol_ratio:.2f} "
                 f"above_ema200={above_ema200} bullish_cross={bullish_cross} "
-                f"reasons={reasons if reasons else ['ok']}"
+                f"reasons=['{reason}']"
             )
-
-            return float(score)
+            return score
 
         except Exception as exc:
             print(
-                f"[CoinSelector] {symbol} on {self.fetcher.exchange_name}: "
-                f"error during scoring — {exc}"
+                f"[CoinSelector] {symbol} | "
+                f"error on {self.fetcher.exchange_name}: {exc}"
             )
             return None
 

@@ -1,6 +1,5 @@
 #main.py
 
-
 from config.env_loader import load_env_file
 from config.live import LiveSettings
 from execution.multi_runner import MultiSymbolTradingSystem
@@ -13,8 +12,8 @@ def build_strategy_config(settings: LiveSettings) -> StrategyConfig:
     return StrategyConfig(
         min_adx=22.0,
         min_atr_pct=0.0011,
-        rsi_long_min=45.0,
-        rsi_long_max=64.0,
+        rsi_long_min=40.0,
+        rsi_long_max=70.0,
         fee_pct_per_side=settings.strategy_fee_pct_per_side,
         slippage_pct_per_side=settings.strategy_slippage_pct_per_side,
         stop_atr_mult=1.30,
@@ -22,8 +21,8 @@ def build_strategy_config(settings: LiveSettings) -> StrategyConfig:
         trail_activate_atr_mult=1.0,
         trail_atr_mult=1.0,
         cooldown_minutes=settings.cooldown_minutes,
-        min_expected_edge=0.00020,
-        base_long_threshold=0.50,
+        min_expected_edge=0.00005,
+        base_long_threshold=0.49,
     )
 
 
