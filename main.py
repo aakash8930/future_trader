@@ -10,10 +10,10 @@ from logs.logger import TradeLogger
 
 def build_strategy_config(settings: LiveSettings) -> StrategyConfig:
     return StrategyConfig(
-        min_adx=22.0,
-        min_atr_pct=0.0011,
+        min_adx=20.0,
+        min_atr_pct=0.0010,
         rsi_long_min=40.0,
-        rsi_long_max=70.0,
+        rsi_long_max=75.0,
         fee_pct_per_side=settings.strategy_fee_pct_per_side,
         slippage_pct_per_side=settings.strategy_slippage_pct_per_side,
         stop_atr_mult=1.30,
