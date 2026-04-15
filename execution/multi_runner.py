@@ -1,5 +1,6 @@
 #execution/multi_runner.py
 
+import signal
 import time
 import json
 from pathlib import Path
@@ -38,24 +39,25 @@ class MultiSymbolTradingSystem:
             exchange_name=settings.exchange_name,
             exchange_fallbacks=settings.exchange_fallbacks,
             exchange_timeout_ms=settings.exchange_timeout_ms,
+            demo_mode=(settings.mode == "demo"),
         )
 
     def _model_quality_ok(self, symbol: str) -> bool:
-        metadata_path = Path("models") / symbol.replace("/", "_") / "metadata.json"
-        if not metadata_path.exists():
-            return False
-
-        try:
-            data = json.loads(metadata_path.read_text(encoding="utf-8"))
-            metrics = data.get("metrics", {})
-        except Exception:
-            return False
-
-        return (
-            float(metrics.get("val_f1", 0.0)) >= self.settings.min_model_val_f1
-            and float(metrics.get("val_precision", 0.0)) >= self.settings.min_model_val_precision
-            and float(metrics.get("val_recall", 0.0)) >= self.settings.min_model_val_recall
-        )
+        folder = symbol.replace("/", "_")
+        for subfolder in [f"models/{folder}", f"models/{folder}_lstm", f"models/{folder}_xgb"]:
+            metadata_path = Path(subfolder) / "metadata.json"
+            if metadata_path.exists():
+                try:
+                    data = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    metrics = data.get("metrics", {})
+                    return (
+                        float(metrics.get("val_f1", 0.0)) >= self.settings.min_model_val_f1
+                        and float(metrics.get("val_precision", 0.0)) >= self.settings.min_model_val_precision
+                        and float(metrics.get("val_recall", 0.0)) >= self.settings.min_model_val_recall
+                    )
+                except Exception:
+                    continue
+        return False
 
     def _filtered_active_symbols(self, symbols: list[str]) -> list[str]:
         filtered: list[str] = []
@@ -88,52 +90,75 @@ class MultiSymbolTradingSystem:
         )
 
         self.runners[symbol] = runner
-        print(f"➕ Runner added for {symbol}")
+        print(f"[+] Runner added for {symbol}")
 
     def _remove_inactive_runners(self, active_symbols: list[str]):
         inactive = [symbol for symbol in self.runners if symbol not in active_symbols]
         for symbol in inactive:
             del self.runners[symbol]
-            print(f"➖ Runner removed for {symbol}")
+            print(f"[-] Runner removed for {symbol}")
+
+    def _persist_all(self):
+        """Persist state for all active runners before shutdown."""
+        for symbol, runner in list(self.runners.items()):
+            try:
+                runner._persist_state()
+            except Exception as exc:
+                print(f"[{symbol}] Failed to persist state: {exc}")
 
     def run_loop(self):
-        print(f"🚀 Autonomous trading system started [MODE={self.settings.mode}]")
+        print(f"[>>] Autonomous trading system started [MODE={self.settings.mode}]")
 
-        while True:
-            try:
-                active_symbols = self.universe.refresh_if_needed()
-                active_symbols = self._filtered_active_symbols(active_symbols)
+        def _sig_handler(signum, frame):
+            print(f"\n[SYSTEM] Received signal {signum}, shutting down gracefully...")
+            self._persist_all()
+            print("[SYSTEM] Shutdown complete.")
+            raise KeyboardInterrupt("Graceful shutdown")
 
-                if not active_symbols:
-                    self._remove_inactive_runners([])
-                    print("[SYSTEM] no active tradable symbols → flat mode")
-                    time.sleep(max(self.settings.sleep_seconds, 120))
-                    continue
+        old_sigint = signal.signal(signal.SIGINT, _sig_handler)
+        old_sigterm = signal.signal(signal.SIGTERM, _sig_handler)
 
-                for symbol in active_symbols:
-                    self._ensure_runner(symbol)
+        try:
+            while True:
+                try:
+                    active_symbols = self.universe.refresh_if_needed()
+                    active_symbols = self._filtered_active_symbols(active_symbols)
 
-                self._remove_inactive_runners(active_symbols)
-
-                for symbol, runner in list(self.runners.items()):
-                    if symbol not in active_symbols:
+                    if not active_symbols:
+                        self._remove_inactive_runners([])
+                        print("[SYSTEM] no active tradable symbols -> flat mode")
+                        time.sleep(max(self.settings.sleep_seconds, 120))
                         continue
-                    runner.run_once()
 
-                time.sleep(self.settings.sleep_seconds)
+                    for symbol in active_symbols:
+                        self._ensure_runner(symbol)
 
-            except KeyboardInterrupt:
-                print("Stopped by user")
-                break
+                    self._remove_inactive_runners(active_symbols)
 
-            except RuntimeError as e:
-                error_msg = str(e)
-                if "FETCHER" in error_msg or "exchange" in error_msg.lower():
-                    print(f"\n❌ FATAL: {error_msg}")
-                    print("\nSystem cannot start due to exchange connectivity issues.")
+                    for symbol, runner in list(self.runners.items()):
+                        if symbol not in active_symbols:
+                            continue
+                        runner.run_once()
+
+                    time.sleep(self.settings.sleep_seconds)
+
+                except KeyboardInterrupt:
+                    print("Stopped by user")
                     break
-                raise
 
-            except Exception as e:
-                print(f"System error: {e}")
-                time.sleep(30)
+                except RuntimeError as e:
+                    error_msg = str(e)
+                    if "FETCHER" in error_msg or "exchange" in error_msg.lower():
+                        print(f"\n[X] FATAL: {error_msg}")
+                        print("\nSystem cannot start due to exchange connectivity issues.")
+                        break
+                    raise
+
+                except Exception as e:
+                    import traceback
+                    print(f"System error: {e}")
+                    print(f"System traceback: {traceback.format_exc()[-500:]}")
+                    time.sleep(30)
+        finally:
+            signal.signal(signal.SIGINT, old_sigint)
+            signal.signal(signal.SIGTERM, old_sigterm)

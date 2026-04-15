@@ -53,20 +53,14 @@ def main():
     df = fetch_history(SYMBOL, TIMEFRAME, CANDLES)
     print(f"Fetched {len(df)} candles")
 
-    model_dir = f"models/{SYMBOL.replace('/', '_')}"
-
-    sim = HistoricalSimulator(
-        model_path=f"{model_dir}/model.pt",
-        scaler_path=f"{model_dir}/scaler.save",
-        metadata_path=f"{model_dir}/metadata.json",
-    )
+    sim = HistoricalSimulator(symbol=SYMBOL)
 
     print("Running simulation...")
     for i in range(sim.lookback, len(df)):
         window = df.iloc[i - sim.lookback : i + 1]
         sim.step(window)
 
-    sim.export("v2/data_outputs/v2_backtest_trades.csv")
+    sim.export("data_outputs/v2_backtest_trades.csv")
     print("Simulation finished.")
 
 

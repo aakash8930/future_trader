@@ -51,7 +51,7 @@ class MarketGuard:
         if drawdown >= self.max_daily_drawdown_pct:
             self.trading_disabled = True
             print(
-                f"🛑 MARKET GUARD: Daily drawdown {drawdown:.2%} "
+                f"[!!] MARKET GUARD: Daily drawdown {drawdown:.2%} "
                 f"exceeded limit → trading stopped"
             )
             return False
@@ -59,7 +59,7 @@ class MarketGuard:
         if self.consecutive_losses >= self.max_consecutive_losses:
             self.trading_disabled = True
             print(
-                f"🛑 MARKET GUARD: {self.consecutive_losses} consecutive losses "
+                f"[!!] MARKET GUARD: {self.consecutive_losses} consecutive losses "
                 f"→ trading stopped"
             )
             return False

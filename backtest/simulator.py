@@ -23,15 +23,24 @@ from features.technicals import compute_core_features
 class HistoricalSimulator:
     def __init__(
         self,
-        model_path: str,
-        scaler_path: str,
-        metadata_path: str,
+        model_path: str | None = None,
+        scaler_path: str | None = None,
+        metadata_path: str | None = None,
         starting_balance: float = 500.0,
         lookback: int = 300,
         config: StrategyConfig | None = None,
         risk_per_trade: float = 0.01,
+        symbol: str = "",
     ):
-        self.model = DirectionModel(model_path, scaler_path, metadata_path)
+        # Support ensemble models via symbol factory
+        if symbol:
+            try:
+                from models.ensemble import EnsembleDirectionModel
+                self.model = EnsembleDirectionModel.for_symbol(symbol)
+            except Exception:
+                self.model = DirectionModel(model_path, scaler_path, metadata_path)
+        else:
+            self.model = DirectionModel(model_path, scaler_path, metadata_path)
         self.cfg   = config or StrategyConfig()
 
         self.strategy     = StrategyEngine(self.model, risk_per_trade, self.cfg)

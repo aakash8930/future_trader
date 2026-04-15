@@ -1,0 +1,50 @@
+{
+  "model_name": "RUDRA-ALPHA",
+  "model_version": "v1.1",
+  "model_type": "LSTM",
+  "symbol": "XRP/USDT",
+  "feature_columns": [
+    "ema_fast",
+    "ema_slow",
+    "ema_spread",
+    "dist_ema200",
+    "ema_fast_slope",
+    "rsi",
+    "rsi_delta",
+    "ret",
+    "vol",
+    "volume_zscore",
+    "atr_pct",
+    "adx",
+    "breakout_strength",
+    "obv",
+    "macd_line",
+    "macd_signal",
+    "macd_hist",
+    "bb_width",
+    "bb_position",
+    "vwap",
+    "volume_momentum",
+    "momentum_5",
+    "atr_regime"
+  ],
+  "window_size": 16,
+  "horizon": 12,
+  "stop_atr_mult": 2.0,
+  "take_atr_mult": 3.0,
+  "timeframe": "15m",
+  "optimized_long_threshold": 0.45,
+  "threshold_optimization": {
+    "precision": 0.1897810218978102,
+    "trade_rate": 0.8670886075949367,
+    "sharpe": -8.510294609772,
+    "n_trades": 137,
+    "score": -8.498192835772185
+  },
+  "train_rows": 606,
+  "val_rows": 158,
+  "trained_at_utc": "2026-04-12T20:54:55.609309+00:00",
+  "metrics": {
+    "val_sharpe": -8.510294609772
+  }
+}

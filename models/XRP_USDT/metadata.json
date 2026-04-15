@@ -1,27 +1,55 @@
 {
   "model_name": "RUDRA-ALPHA",
   "model_version": "v1.1",
+  "model_type": "MLP",
   "symbol": "XRP/USDT",
   "feature_columns": [
     "ema_fast",
     "ema_slow",
+    "ema_spread",
+    "dist_ema200",
+    "ema_fast_slope",
     "rsi",
+    "rsi_delta",
     "ret",
     "vol",
+    "volume_zscore",
     "atr_pct",
-    "adx"
+    "adx",
+    "breakout_strength",
+    "obv",
+    "macd_line",
+    "macd_signal",
+    "macd_hist",
+    "bb_width",
+    "bb_position",
+    "vwap",
+    "volume_momentum",
+    "momentum_5",
+    "atr_regime"
   ],
-  "horizon": 5,
-  "atr_multiplier": 0.8,
+  "horizon": 12,
+  "stop_atr_mult": 2.0,
+  "take_atr_mult": 3.0,
   "timeframe": "15m",
-  "train_rows": 626,
-  "val_rows": 160,
-  "trained_at_utc": "2026-03-03T01:34:14.313569+00:00",
+  "optimized_long_threshold": 0.49000000000000005,
+  "threshold_optimization": {
+    "precision": 0.25,
+    "trade_rate": 0.5063291139240507,
+    "sharpe": -5.499090833947008,
+    "n_trades": 80,
+    "score": -5.456907289643211
+  },
+  "train_rows": 621,
+  "val_rows": 158,
+  "trained_at_utc": "2026-04-12T20:54:55.292368+00:00",
   "metrics": {
-    "val_accuracy": 0.79375,
-    "val_precision": 0.0,
-    "val_recall": 0.0,
-    "val_f1": 0.0,
-    "val_positive_rate": 0.0
-  }
+    "val_accuracy": 0.5822784810126582,
+    "val_precision": 0.25,
+    "val_recall": 0.7692307692307693,
+    "val_f1": 0.37735849056603776,
+    "val_positive_rate": 0.5063291139240507
+  },
+  "last_incremental_train_utc": "2026-04-14T15:38:20.676458+00:00",
+  "incremental_train_count": 9
 }

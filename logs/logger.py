@@ -1,24 +1,35 @@
 # logs/logger.py
 
 import os
-import psycopg2
-from psycopg2 import InterfaceError, OperationalError
 from datetime import datetime, timezone
+
+# psycopg2 is optional — only needed for the SQL-backed trade logger.
+# If DATABASE_URL is not set, trade logging is silently disabled.
+try:
+    import psycopg2
+    from psycopg2 import InterfaceError, OperationalError
+    _HAS_PSYCOPG = True
+except ImportError:
+    _HAS_PSYCOPG = False
 
 
 class TradeLogger:
+    """
+    Writes trade records to PostgreSQL if DATABASE_URL is set.
+    Silently does nothing if no database is configured.
+    """
 
     def __init__(self):
         self.database_url = os.getenv("DATABASE_PUBLIC_URL") or os.getenv("DATABASE_URL")
-        if not self.database_url:
-            print("[LOGGER] No DATABASE_URL set — trade logging disabled.")
-            self.conn = None
-            return
-
         self.conn = None
+        if not self.database_url:
+            print("[LOGGER] No DATABASE_URL — trade logging to SQL disabled (JSONL still active).")
+            return
+        if not _HAS_PSYCOPG:
+            print("[LOGGER] psycopg2 not installed — trade logging to SQL disabled.")
+            return
         self._connect()
 
-    # ------------------------------------------------------------------
     def _connect(self):
         try:
             self.conn = psycopg2.connect(self.database_url)
@@ -29,17 +40,14 @@ class TradeLogger:
             print(f"[LOGGER] Database connection failed — trade logging disabled. Error: {exc}")
             self.conn = None
 
-    # ------------------------------------------------------------------
     def _ensure_connection(self) -> bool:
         if self.conn is None:
             self._connect()
             return self.conn is not None
-
         try:
             if self.conn.closed != 0:
                 self._connect()
                 return self.conn is not None
-
             with self.conn.cursor() as cur:
                 cur.execute("SELECT 1;")
             return True
@@ -47,12 +55,7 @@ class TradeLogger:
             self._connect()
             return self.conn is not None
 
-    # ------------------------------------------------------------------
     def _ensure_schema(self):
-        """
-        Idempotently create the trades table and all required columns.
-        Safe to call on every startup — uses IF NOT EXISTS / ADD COLUMN IF NOT EXISTS.
-        """
         with self.conn.cursor() as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS trades (
@@ -78,8 +81,6 @@ class TradeLogger:
                     add_count   INTEGER DEFAULT 0
                 );
             """)
-
-            # Idempotent column additions for live databases that predate a schema update.
             extra_cols = [
                 ("avg_entry",   "DOUBLE PRECISION"),
                 ("threshold",   "DOUBLE PRECISION"),
@@ -93,15 +94,11 @@ class TradeLogger:
                 ("add_count",   "INTEGER DEFAULT 0"),
             ]
             for col, col_type in extra_cols:
-                cur.execute(
-                    f"ALTER TABLE trades ADD COLUMN IF NOT EXISTS {col} {col_type};"
-                )
-
+                cur.execute(f"ALTER TABLE trades ADD COLUMN IF NOT EXISTS {col} {col_type};")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades(timestamp DESC);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_trades_symbol    ON trades(symbol);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_trades_symbol_ts ON trades(symbol, timestamp DESC);")
 
-    # ------------------------------------------------------------------
     def log(
         self,
         symbol:      str,

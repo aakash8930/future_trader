@@ -6,12 +6,14 @@ from features.technicals import compute_core_features
 
 
 def _has_trained_model(symbol: str) -> bool:
-    folder = os.path.join("models", symbol.replace("/", "_"))
-    return (
-        os.path.exists(os.path.join(folder, "model.pt"))
-        and os.path.exists(os.path.join(folder, "scaler.save"))
-        and os.path.exists(os.path.join(folder, "metadata.json"))
-    )
+    folder = symbol.replace("/", "_")
+    # Check legacy MLP path and any model subdirectories
+    for subfolder in [f"models/{folder}", f"models/{folder}_lstm", f"models/{folder}_xgb"]:
+        if os.path.exists(os.path.join(subfolder, "metadata.json")):
+            if (os.path.exists(os.path.join(subfolder, "model.pt")) or
+                os.path.exists(os.path.join(subfolder, "model.save"))):
+                return True
+    return False
 
 
 class CoinSelector:
@@ -47,12 +49,14 @@ class CoinSelector:
         exchange_name: str = "binance",
         exchange_fallbacks: list[str] | None = None,
         exchange_timeout_ms: int = 20000,
+        demo_mode: bool = False,
     ):
         self.timeframe = timeframe
         self.lookback = lookback
         self.top_k = top_k
         self.min_atr_pct = min_atr_pct
         self.soft_min_volume_ratio = soft_min_volume_ratio
+        self.demo_mode = demo_mode
         self.rsi_long_min = rsi_long_min
         self.rsi_long_max = rsi_long_max
 
@@ -70,13 +74,23 @@ class CoinSelector:
 
         from models.direction import DirectionModel
 
-        model = DirectionModel.for_symbol(symbol)
-        self._model_cache[symbol] = model
-        return model
+        try:
+            model = DirectionModel.for_symbol(symbol)
+            self._model_cache[symbol] = model
+            return model
+        except (UnicodeEncodeError, UnicodeDecodeError) as e:
+            # Windows cp1252 encoding issue with metadata files
+            print(f"[CoinSelector] {symbol} | encoding_error: {e}")
+            return None
+        except Exception as e:
+            print(f"[CoinSelector] {symbol} | model_load_error: {e}")
+            return None
 
     def _model_probability_and_threshold(self, symbol: str, df) -> tuple[float, float]:
         try:
             model = self._get_model(symbol)
+            if model is None:
+                return 0.5, 0.50
             prob = float(model.predict_proba(df))
             long_th = float(getattr(model, "long_threshold", 0.50))
 
@@ -161,7 +175,7 @@ class CoinSelector:
             momentum_override = (
                 bullish_cross
                 and adx >= 30.0
-                and atr_pct >= max(self.min_atr_pct, 0.0010)
+                and atr_pct >= self.min_atr_pct
                 and prob_up >= adaptive_long_th + 0.01
                 and dist_ema200 > -0.020
             )
@@ -169,43 +183,47 @@ class CoinSelector:
             reasons: list[str] = []
 
             # Hard rejects only for clearly bad cases.
-            if atr_pct < self.min_atr_pct * 0.80:
-                reasons.append("atr_too_low")
+            if atr_pct < self.min_atr_pct:
+                print(f"[ATR DEBUG] atr_pct={atr_pct:.6f} < min_atr_pct={self.min_atr_pct:.6f} -> blocked")
+                reasons.append(f"atr_pct_low({atr_pct:.4f}<{self.min_atr_pct:.4f})")
 
-            if vol_ratio < self.soft_min_volume_ratio * 0.60:
-                reasons.append("volume_too_low")
+            # Demo mode: skip volume and far_below_ema200 blocks
+            if not self.demo_mode:
+                if vol_ratio < self.soft_min_volume_ratio * 0.60:
+                    reasons.append("volume_too_low")
 
+                if not above_ema200 and dist_ema200 <= -0.035 and not momentum_override:
+                    reasons.append("far_below_ema200")
+
+            # Soft scoring instead of hard RSI/prob blocks.
+            # RSI: lower is better in the 30-60 recovery zone; penalize extremes.
+            if rsi < 30.0:
+                rsi_score = -0.08
+                reasons.append("rsi_oversold")
+            elif rsi < self.rsi_long_min:
+                rsi_score = -0.04
+            elif rsi > 78.0:
+                rsi_score = -0.06
+            else:
+                rsi_score = 0.0
+
+            # Probability: score contribution, no hard block
             if prob_up < adaptive_long_th - 0.035:
-                reasons.append("prob_too_low")
-
-            if not above_ema200 and dist_ema200 <= -0.035 and not momentum_override:
-                reasons.append("far_below_ema200")
-
-            # RSI handling:
-            # - keep lower bound
-            # - relax upper bound in strong trends
-            rsi_upper = self.rsi_long_max
-            if strong_trend:
-                rsi_upper = max(rsi_upper, 82.0)
-            elif adx >= 32.0 and above_ema200 and bullish_cross:
-                rsi_upper = max(rsi_upper, 80.0)
-
-            if rsi < self.rsi_long_min:
-                reasons.append("rsi_too_low")
-            elif rsi > rsi_upper:
-                reasons.append("rsi_bad")
+                reasons.append("prob_below_thresh")
 
             if reasons:
-                print(
-                    f"[CoinSelector] {symbol} | "
-                    f"score=-999.000 "
-                    f"prob={prob_up:.3f}/{adaptive_long_th:.3f} "
-                    f"adx={adx:.1f} atr_pct={atr_pct:.4f} "
-                    f"rsi={rsi:.1f} vol_ratio={vol_ratio:.2f} "
-                    f"above_ema200={above_ema200} bullish_cross={bullish_cross} "
-                    f"reasons={reasons}"
-                )
-                return -999.0
+                # Only hard-reject on atr/volume/far_ema; everything else gets a score
+                if "atr_too_low" in reasons or "volume_too_low" in reasons or "far_below_ema200" in reasons:
+                    print(
+                        f"[CoinSelector] {symbol} | "
+                        f"score=-999.000 "
+                        f"prob={prob_up:.3f}/{adaptive_long_th:.3f} "
+                        f"adx={adx:.1f} atr_pct={atr_pct:.4f} "
+                        f"rsi={rsi:.1f} vol_ratio={vol_ratio:.2f} "
+                        f"above_ema200={above_ema200} bullish_cross={bullish_cross} "
+                        f"reasons={reasons}"
+                    )
+                    return -999.0
 
             # Soft score:
             # probability matters most, then regime alignment, then momentum/liquidity.
@@ -214,6 +232,11 @@ class CoinSelector:
             score += min(adx, 50.0) / 100.0
             score += min(atr_pct, 0.0100) * 18.0
             score += min(max(vol_ratio, 0.0), 3.0) * 0.04
+            # RSI soft penalty
+            score += rsi_score
+            # Extra credit for bullish RSI zone (not overbought, not oversold)
+            if 40.0 <= rsi <= 65.0:
+                score += 0.05
 
             if above_ema200:
                 score += 0.12
@@ -229,9 +252,9 @@ class CoinSelector:
             if momentum_override and not above_ema200:
                 score += 0.03
 
-            # Mild penalty for late/extreme RSI, but no automatic rejection.
-            if rsi > 72.0:
-                score -= min((rsi - 72.0) * 0.006, 0.08)
+            # Mild penalty for extreme RSI, but no automatic rejection.
+            if rsi > 78.0:
+                score -= min((rsi - 78.0) * 0.005, 0.06)
 
             score = float(max(score, 0.0))
 
@@ -248,7 +271,7 @@ class CoinSelector:
                 f"adx={adx:.1f} atr_pct={atr_pct:.4f} "
                 f"rsi={rsi:.1f} vol_ratio={vol_ratio:.2f} "
                 f"above_ema200={above_ema200} bullish_cross={bullish_cross} "
-                f"reasons=['{reason}']"
+                f"reason=['{reason}']"
             )
             return score
 
@@ -285,7 +308,7 @@ class CoinSelector:
         filtered_ranked = [s for s in ranked if scores[s] > -100]
 
         if not filtered_ranked:
-            print("⚠️ CoinSelector found no long-ready symbols")
+            print("[WARN] CoinSelector found no long-ready symbols")
             return []
 
         return filtered_ranked[: self.top_k]

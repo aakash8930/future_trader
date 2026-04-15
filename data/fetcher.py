@@ -98,7 +98,7 @@ class MarketDataFetcher:
                 exchange = self._create_exchange(exchange_name, timeout_ms)
                 exchange.load_markets()
 
-                print(f"[FETCHER] ✓ using exchange: {exchange_name}")
+                print(f"[FETCHER] [OK] using exchange: {exchange_name}")
                 return exchange, exchange_name
 
             except ExchangeNotAvailable as e:
@@ -152,6 +152,7 @@ class MarketDataFetcher:
         return exchange_class({
             "enableRateLimit": True,
             "timeout": timeout_ms,
+            "options": {"defaultType": "spot", "sandbox": False},
         })
 
     def is_symbol_supported(self, symbol: str) -> bool:

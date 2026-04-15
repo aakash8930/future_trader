@@ -10,19 +10,19 @@ from logs.logger import TradeLogger
 
 def build_strategy_config(settings: LiveSettings) -> StrategyConfig:
     return StrategyConfig(
-        min_adx=20.0,
-        min_atr_pct=0.0010,
-        rsi_long_min=40.0,
-        rsi_long_max=75.0,
+        min_adx=settings.strategy_min_adx,
+        min_atr_pct=settings.strategy_min_atr_pct,
+        rsi_long_min=settings.strategy_rsi_long_min,
+        rsi_long_max=settings.strategy_rsi_long_max,
         fee_pct_per_side=settings.strategy_fee_pct_per_side,
         slippage_pct_per_side=settings.strategy_slippage_pct_per_side,
-        stop_atr_mult=1.30,
-        take_atr_mult=3.80,
-        trail_activate_atr_mult=1.0,
-        trail_atr_mult=1.0,
+        stop_atr_mult=settings.strategy_stop_atr_mult,
+        take_atr_mult=settings.strategy_take_atr_mult,
+        trail_activate_atr_mult=settings.strategy_trail_atr_mult,
+        trail_atr_mult=settings.strategy_trail_atr_mult,
         cooldown_minutes=settings.cooldown_minutes,
-        min_expected_edge=0.00005,
-        base_long_threshold=0.49,
+        min_expected_edge=settings.strategy_min_expected_edge,
+        base_long_threshold=settings.strategy_min_prob,
     )
 
 
@@ -72,7 +72,7 @@ def main():
         error_msg = str(e)
         if "FETCHER" in error_msg or "exchange" in error_msg.lower():
             print(f"\n{'=' * 60}")
-            print("❌ FATAL ERROR - Cannot Start Trading System")
+            print("[X] FATAL ERROR - Cannot Start Trading System")
             print("=" * 60)
             print(error_msg)
             print("=" * 60)

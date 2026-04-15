@@ -1,6 +1,7 @@
 {
   "model_name": "RUDRA-ALPHA",
   "model_version": "v1.1",
+  "model_type": "MLP",
   "symbol": "ETH/USDT",
   "feature_columns": [
     "ema_fast",
@@ -15,28 +16,40 @@
     "volume_zscore",
     "atr_pct",
     "adx",
-    "breakout_strength"
+    "breakout_strength",
+    "obv",
+    "macd_line",
+    "macd_signal",
+    "macd_hist",
+    "bb_width",
+    "bb_position",
+    "vwap",
+    "volume_momentum",
+    "momentum_5",
+    "atr_regime"
   ],
   "horizon": 12,
   "stop_atr_mult": 2.0,
   "take_atr_mult": 3.0,
   "timeframe": "15m",
-  "optimized_long_threshold": 0.49000000000000005,
+  "optimized_long_threshold": 0.45,
   "threshold_optimization": {
-    "precision": 0.3088235294117647,
-    "recall": 0.5121951219512195,
-    "f1": 0.3853211009174312,
-    "trade_rate": 0.43037974683544306,
-    "score": 0.3300785272316098
+    "precision": 0.3373493975903614,
+    "trade_rate": 0.5253164556962026,
+    "sharpe": -2.1035035708853163,
+    "n_trades": 83,
+    "score": -2.044799514152054
   },
   "train_rows": 621,
   "val_rows": 158,
-  "trained_at_utc": "2026-03-15T02:21:10.069167+00:00",
+  "trained_at_utc": "2026-04-12T20:54:48.735621+00:00",
   "metrics": {
-    "val_accuracy": 0.5759493670886076,
-    "val_precision": 0.3088235294117647,
-    "val_recall": 0.5121951219512195,
-    "val_f1": 0.3853211009174312,
-    "val_positive_rate": 0.43037974683544306
-  }
+    "val_accuracy": 0.5506329113924051,
+    "val_precision": 0.3373493975903614,
+    "val_recall": 0.6363636363636364,
+    "val_f1": 0.4409448818897638,
+    "val_positive_rate": 0.5253164556962026
+  },
+  "last_incremental_train_utc": "2026-04-14T15:38:17.100949+00:00",
+  "incremental_train_count": 9
 }

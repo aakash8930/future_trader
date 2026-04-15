@@ -1,0 +1,1032 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RUDRA Trading Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0a0a0a;
+            --bg-secondary: #111111;
+            --bg-tertiary: #1a1a1a;
+            --bg-card: #141414;
+            --border: #2a2a2a;
+            --border-light: #333333;
+            --text-primary: #ffffff;
+            --text-secondary: #a0a0a0;
+            --text-muted: #666666;
+            --accent-green: #00ff88;
+            --accent-red: #ff4444;
+            --accent-blue: #4488ff;
+            --accent-yellow: #ffaa00;
+            --accent-purple: #aa88ff;
+            --positive: #00cc66;
+            --negative: #ee4444;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+
+        .mono { font-family: 'JetBrains Mono', monospace; }
+
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: var(--bg-secondary); }
+        ::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
+
+        /* ─── Header ─── */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .header-left { display: flex; align-items: center; gap: 12px; }
+        .logo { font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+        .logo-dot { width: 7px; height: 7px; background: var(--accent-green); border-radius: 50%; animation: pulse 2s ease-in-out infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        .mode-badge { padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+        .mode-badge.paper { background: rgba(0,255,136,0.1); color: var(--accent-green); border: 1px solid rgba(0,255,136,0.3); }
+        .mode-badge.shadow { background: rgba(170,136,255,0.1); color: var(--accent-purple); border: 1px solid rgba(170,136,255,0.3); }
+        .mode-badge.live { background: rgba(255,68,68,0.1); color: var(--accent-red); border: 1px solid rgba(255,68,68,0.3); }
+        .mode-badge.demo { background: rgba(255,170,0,0.1); color: var(--accent-yellow); border: 1px solid rgba(255,170,0,0.3); }
+        .header-right { display: flex; align-items: center; gap: 10px; }
+        .uptime { font-size: 11px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+        .status-indicator { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-secondary); }
+        .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-green); }
+        .status-dot.offline { background: var(--accent-red); }
+        .status-dot.live { background: var(--accent-green); }
+        .status-dot.sql { background: var(--accent-blue); }
+
+        /* ─── Main Layout ─── */
+        .main { padding: 16px 20px 24px; display: flex; flex-direction: column; gap: 16px; }
+
+        /* ─── Top Row: Stats ─── */
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+        }
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 14px 16px;
+        }
+        .stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 6px; }
+        .stat-value { font-size: 22px; font-weight: 600; font-family: 'JetBrains Mono', monospace; }
+        .stat-value.positive { color: var(--positive); }
+        .stat-value.negative { color: var(--negative); }
+        .stat-sub { font-size: 11px; margin-top: 3px; font-family: 'JetBrains Mono', monospace; }
+        .stat-sub.up { color: var(--accent-green); }
+        .stat-sub.down { color: var(--accent-red); }
+        .stat-sub.neutral { color: var(--text-muted); }
+
+        /* ─── Equity + Signal Monitor Row ─── */
+        .mid-row {
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            gap: 16px;
+            align-items: start;
+        }
+
+        /* ─── Cards ─── */
+        .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+        .card-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+        .card-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); }
+        .card-body { padding: 12px 14px; }
+
+        /* ─── Equity Chart ─── */
+        .equity-chart { height: 200px; position: relative; }
+        .balance-row { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+        .balance-main { font-size: 24px; font-weight: 600; font-family: 'JetBrains Mono', monospace; }
+        .balance-starting { font-size: 12px; color: var(--text-muted); }
+
+        /* ─── Signal Monitor ─── */
+        .signal-list { display: flex; flex-direction: column; gap: 0; max-height: 460px; overflow-y: auto; }
+        .signal-item {
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            gap: 10px;
+            align-items: start;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 12px;
+        }
+        .signal-item:last-child { border-bottom: none; }
+        .signal-symbol { font-weight: 600; font-size: 12px; padding-top: 1px; }
+        .signal-details { display: flex; flex-direction: column; gap: 3px; }
+        .signal-indicators { display: flex; flex-wrap: wrap; gap: 4px; }
+        .ind-badge { padding: 2px 6px; border-radius: 3px; font-size: 10px; font-family: 'JetBrains Mono', monospace; background: var(--bg-tertiary); color: var(--text-secondary); }
+        .ind-badge.pass { color: var(--accent-green); background: rgba(0,255,136,0.08); }
+        .ind-badge.fail { color: var(--accent-red); background: rgba(255,68,68,0.08); }
+        .ind-badge.neutral { color: var(--accent-yellow); background: rgba(255,170,0,0.08); }
+        .signal-status { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+        .signal-prob { font-size: 16px; font-weight: 600; font-family: 'JetBrains Mono', monospace; }
+        .signal-prob.high { color: var(--accent-green); }
+        .signal-prob.mid { color: var(--accent-yellow); }
+        .signal-prob.low { color: var(--accent-red); }
+        .signal-th { font-size: 10px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+        .signal-reason { font-size: 10px; color: var(--text-muted); max-width: 140px; text-align: right; }
+        .signal-score { font-size: 10px; font-family: 'JetBrains Mono', monospace; color: var(--text-secondary); }
+        .signal-item.skipped { opacity: 0.6; }
+        .signal-item.active { border-left: 2px solid var(--accent-green); padding-left: 8px; margin-left: -2px; }
+        .signal-item.no-model { opacity: 0.4; }
+        .no-signals { text-align: center; padding: 24px; color: var(--text-muted); font-size: 12px; }
+
+        /* ─── Active Position ─── */
+        .position-card .card-body { display: flex; flex-direction: column; gap: 10px; }
+        .pos-empty { text-align: center; padding: 20px; color: var(--text-muted); font-size: 12px; }
+        .pos-grid { display: grid; gap: 6px; }
+        .pos-row { display: flex; justify-content: space-between; font-size: 12px; }
+        .pos-row .label { color: var(--text-muted); }
+        .pos-row .value { font-family: 'JetBrains Mono', monospace; font-weight: 500; }
+        .pos-pnl { text-align: center; padding: 10px; border-radius: 6px; font-size: 18px; font-weight: 600; font-family: 'JetBrains Mono', monospace; margin-top: 4px; }
+        .pos-pnl.positive { background: rgba(0,204,102,0.1); color: var(--positive); }
+        .pos-pnl.negative { background: rgba(238,68,68,0.1); color: var(--negative); }
+
+        /* ─── Events ─── */
+        .events-card .card-body { max-height: 300px; overflow-y: auto; padding: 8px 12px; }
+        .event-item { display: flex; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 11px; }
+        .event-item:last-child { border-bottom: none; }
+        .event-time { color: var(--text-muted); font-family: 'JetBrains Mono', monospace; font-size: 10px; white-space: nowrap; }
+        .event-type { font-size: 9px; font-weight: 600; text-transform: uppercase; padding: 1px 5px; border-radius: 3px; margin-right: 5px; white-space: nowrap; }
+        .event-type.trade_open { background: rgba(0,204,102,0.15); color: var(--accent-green); }
+        .event-type.trade_close { background: rgba(68,136,255,0.15); color: var(--accent-blue); }
+        .event-type.skip { background: rgba(255,170,0,0.15); color: var(--accent-yellow); }
+        .event-type.system { background: rgba(170,136,255,0.15); color: var(--accent-purple); }
+        .event-msg { color: var(--text-primary); line-height: 1.3; }
+        .no-events { text-align: center; padding: 20px; color: var(--text-muted); font-size: 12px; }
+
+        /* ─── Trades Table ─── */
+        .trades-card { }
+        .trades-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+        .trades-table th { text-align: left; padding: 8px 10px; font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg-card); }
+        .trades-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); font-family: 'JetBrains Mono', monospace; }
+        .trades-table tr:hover td { background: var(--bg-tertiary); }
+        .side-chip { padding: 2px 6px; border-radius: 3px; font-size: 9px; font-weight: 600; text-transform: uppercase; }
+        .side-chip.long { background: rgba(0,204,102,0.15); color: var(--accent-green); }
+        .side-chip.short { background: rgba(238,68,68,0.15); color: var(--accent-red); }
+        .pnl-pos { color: var(--positive); }
+        .pnl-neg { color: var(--negative); }
+        .table-wrap { max-height: 320px; overflow-y: auto; }
+        .no-trades { text-align: center; padding: 20px; color: var(--text-muted); font-size: 12px; }
+
+        /* ─── Bottom Stats ─── */
+        .bottom-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .mini-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+        .mini-stat { background: var(--bg-tertiary); border-radius: 6px; padding: 12px; }
+        .mini-stat .stat-label { margin-bottom: 4px; }
+        .mini-stat .stat-value { font-size: 16px; }
+
+        /* ─── Controls ─── */
+        .control-card { }
+        .ctrl-section { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+        .ctrl-section:last-child { border-bottom: none; }
+        .ctrl-title { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 10px; }
+        .btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 8px 12px; border-radius: 5px; font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.15s; border: 1px solid transparent; font-family: inherit; }
+        .btn-primary { background: var(--text-primary); color: var(--bg-primary); }
+        .btn-primary:hover { background: #d0d0d0; }
+        .btn-secondary { background: transparent; color: var(--text-primary); border-color: var(--border-light); }
+        .btn-secondary:hover { border-color: var(--text-primary); }
+        .btn-danger { background: transparent; color: var(--accent-red); border-color: rgba(238,68,68,0.3); }
+        .btn-danger:hover { background: rgba(238,68,68,0.1); }
+        .btn-warning { background: transparent; color: var(--accent-yellow); border-color: rgba(255,170,0,0.3); }
+        .btn-warning:hover { background: rgba(255,170,0,0.1); }
+        .btn-success { background: transparent; color: var(--accent-green); border-color: rgba(0,204,102,0.3); }
+        .btn-success:hover { background: rgba(0,204,102,0.1); }
+        .btn-row { display: flex; gap: 6px; }
+        .btn-row .btn { flex: 1; }
+        .slider-group { margin-bottom: 10px; }
+        .slider-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; }
+        .slider-val { font-family: 'JetBrains Mono', monospace; color: var(--text-primary); }
+        input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 3px; background: var(--border-light); border-radius: 2px; outline: none; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; background: var(--text-primary); border-radius: 50%; cursor: pointer; }
+
+        /* ─── Toast ─── */
+        .toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 1000; display: flex; flex-direction: column; gap: 6px; }
+        .toast { background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 6px; padding: 10px 14px; font-size: 12px; display: flex; align-items: center; gap: 8px; animation: slideIn 0.3s ease; max-width: 280px; }
+        @keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
+        .toast.success { border-color: rgba(0,204,102,0.3); }
+        .toast.error { border-color: rgba(238,68,68,0.3); }
+        .toast-icon { font-size: 14px; }
+
+        /* ─── Mobile ─── */
+        @media (max-width: 1024px) {
+            .mid-row { grid-template-columns: 1fr; }
+            .signal-monitor { order: -1; }
+        }
+        @media (max-width: 768px) {
+            .main { padding: 12px; gap: 12px; }
+            .stats-row { grid-template-columns: repeat(2, 1fr); }
+            .stat-value { font-size: 18px; }
+            .bottom-row { grid-template-columns: 1fr; }
+            .mini-stats { grid-template-columns: repeat(2, 1fr); }
+            .header { padding: 10px 12px; }
+            .logo span:last-child { display: none; }
+            .signal-monitor .card-body { padding: 8px 10px; }
+        }
+        @media (max-width: 480px) {
+            .stats-row { grid-template-columns: 1fr 1fr; gap: 8px; }
+            .mini-stats { grid-template-columns: 1fr 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <div class="logo">
+                    <div class="logo-dot"></div>
+                    <span>RUDRA</span>
+                </div>
+                <span id="modeBadge" class="mode-badge paper">Paper</span>
+            </div>
+            <div class="header-right">
+                <div class="uptime" id="uptime">0h 0m</div>
+                <div class="status-indicator" id="dataSourceIndicator">
+                    <div class="status-dot" id="dataSourceDot" style="background:var(--accent-green)"></div>
+                    <span id="dataSourceText">LIVE</span>
+                </div>
+                <div class="status-indicator">
+                    <div class="status-dot" id="statusDot"></div>
+                    <span id="statusText">Connected</span>
+                </div>
+            </div>
+        </header>
+
+        <main class="main">
+            <!-- Stats Row -->
+            <div class="stats-row">
+                <div class="stat-card">
+                    <div class="stat-label">Total P&L</div>
+                    <div id="totalPnl" class="stat-value">$0.00</div>
+                    <div id="totalPnlChange" class="stat-sub neutral">+0.00%</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Win Rate</div>
+                    <div id="winRate" class="stat-value">--%</div>
+                    <div id="winLossCount" class="stat-sub neutral">0W / 0L</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Profit Factor</div>
+                    <div id="profitFactor" class="stat-value">--</div>
+                    <div id="expectancy" class="stat-sub neutral">E: $0.00</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Max Drawdown</div>
+                    <div id="maxDrawdown" class="stat-value negative">$0.00</div>
+                    <div id="maxDrawdownPct" class="stat-sub down">0.00%</div>
+                </div>
+            </div>
+
+            <!-- Mid Row: Equity + Signal Monitor -->
+            <div class="mid-row">
+                <div style="display:flex;flex-direction:column;gap:16px">
+                    <!-- Live Price Chart -->
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">Live Binance Price</span>
+                            <div style="display:flex;gap:8px;align-items:center">
+                                <select id="priceSymbolSelect" onchange="onPriceSymbolChange(this.value)" style="padding:3px 8px;border-radius:4px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-light);font-size:11px;font-family:'Inter',sans-serif;">
+                                    <option value="BTC/USDT">BTC/USDT</option>
+                                    <option value="ETH/USDT">ETH/USDT</option>
+                                    <option value="SOL/USDT">SOL/USDT</option>
+                                    <option value="AVAX/USDT">AVAX/USDT</option>
+                                    <option value="LINK/USDT">LINK/USDT</option>
+                                </select>
+                                <span id="livePriceValue" style="font-size:12px;font-family:'JetBrains Mono',monospace;color:var(--text-primary);">--</span>
+                            </div>
+                        </div>
+                        <div class="card-body no-padding">
+                            <div style="height:180px;position:relative">
+                                <canvas id="priceChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Equity Chart -->
+                    <div class="card equity-card">
+                        <div class="card-header">
+                            <span class="card-title">Equity Curve</span>
+                            <div class="balance-row" style="margin:0">
+                                <span id="balanceValue" class="balance-main mono">$0.00</span>
+                                <span id="startingBalance" class="balance-starting">Start: $500</span>
+                            </div>
+                        </div>
+                        <div class="card-body no-padding">
+                            <div class="equity-chart">
+                                <canvas id="equityChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Signal Monitor -->
+                <div class="card signal-monitor">
+                    <div class="card-header">
+                        <span class="card-title">Live Signal Monitor</span>
+                        <div style="display:flex;gap:8px;align-items:center">
+                            <span id="signalTimestamp" style="font-size:10px;color:var(--text-muted);font-family:'JetBrains Mono',monospace;">--</span>
+                            <span id="signalCount" style="font-size:10px;color:var(--text-muted);">-- symbols</span>
+                        </div>
+                    </div>
+                    <div class="card-body" id="signalListBody">
+                        <div class="no-signals">Loading signals...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Active Position -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Active Position</span>
+                </div>
+                <div class="card-body" id="positionContent">
+                    <div class="pos-empty">No active position</div>
+                </div>
+            </div>
+
+            <!-- Bottom Row: Trades + Controls -->
+            <div class="bottom-row">
+                <!-- Trades Table -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Trade History</span>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="trades-table">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Symbol</th>
+                                    <th>Side</th>
+                                    <th>Entry</th>
+                                    <th>Exit</th>
+                                    <th>P&L</th>
+                                    <th>Reason</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tradesBody">
+                                <tr><td colspan="7" class="no-trades">No trades yet</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Controls -->
+                <div class="card control-card">
+                    <div class="ctrl-section">
+                        <div class="ctrl-title">Trading Mode</div>
+                        <div class="btn-row">
+                            <button id="btnPaper" class="btn btn-primary" onclick="setMode('paper')">Paper</button>
+                            <button id="btnShadow" class="btn btn-secondary" onclick="setMode('shadow')">Shadow</button>
+                            <button id="btnDemo" class="btn btn-warning" onclick="setMode('demo')">Demo</button>
+                            <button id="btnLive" class="btn btn-danger" onclick="setMode('live')">Live</button>
+                        </div>
+                    </div>
+                    <div class="ctrl-section">
+                        <div class="ctrl-title">Timeframe</div>
+                        <select id="timeframeSelect" onchange="setTimeframe(this.value)" style="width:100%;padding:7px 10px;border-radius:5px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-light);font-size:12px;font-family:'Inter',sans-serif;">
+                            <option value="1m">1 minute</option>
+                            <option value="3m">3 minutes</option>
+                            <option value="5m">5 minutes</option>
+                            <option value="15m" selected>15 minutes</option>
+                            <option value="30m">30 minutes</option>
+                            <option value="1h">1 hour</option>
+                            <option value="4h">4 hours</option>
+                            <option value="1d">1 day</option>
+                        </select>
+                    </div>
+                    <div class="ctrl-section">
+                        <div class="ctrl-title">Risk</div>
+                        <div class="slider-group">
+                            <div class="slider-label"><span>Risk Per Trade</span><span class="slider-val" id="riskValue">1.0%</span></div>
+                            <input type="range" id="riskSlider" min="0.5" max="5" step="0.1" value="1" oninput="updateRisk(this.value)">
+                        </div>
+                        <div class="slider-group">
+                            <div class="slider-label"><span>Max Positions</span><span class="slider-val" id="maxPosValue">2</span></div>
+                            <input type="range" id="maxPosSlider" min="1" max="10" step="1" value="2" oninput="updateMaxPos(this.value)">
+                        </div>
+                    </div>
+                    <div class="ctrl-section">
+                        <div class="ctrl-title">Strategy</div>
+                        <div class="slider-group">
+                            <div class="slider-label"><span>Min Probability</span><span class="slider-val" id="minProbValue">50%</span></div>
+                            <input type="range" id="minProbSlider" min="40" max="70" step="1" value="50" oninput="updateMinProb(this.value)">
+                        </div>
+                        <div class="slider-group">
+                            <div class="slider-label"><span>Cooldown</span><span class="slider-val" id="cooldownValue">30m</span></div>
+                            <input type="range" id="cooldownSlider" min="5" max="120" step="5" value="30" oninput="updateCooldown(this.value)">
+                        </div>
+                    </div>
+                    <div class="ctrl-section">
+                        <div class="ctrl-title">Actions</div>
+                        <div class="btn-row">
+                            <button id="btnPause" class="btn btn-secondary" onclick="togglePause()">Pause</button>
+                            <button class="btn btn-secondary" onclick="refreshData()">Refresh</button>
+                            <button class="btn btn-primary" onclick="triggerRetrain()">Retrain</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Events + Mini Stats Row -->
+            <div class="bottom-row">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Live Events</span>
+                        <span id="eventCount" style="font-size:10px;color:var(--text-muted);">0 events</span>
+                    </div>
+                    <div class="events-card card-body" id="eventsContent">
+                        <div class="no-events">Waiting for events...</div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Performance Metrics</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="mini-stats">
+                            <div class="mini-stat">
+                                <div class="stat-label">Total Trades</div>
+                                <div id="totalTrades" class="stat-value">0</div>
+                            </div>
+                            <div class="mini-stat">
+                                <div class="stat-label">Avg Win</div>
+                                <div id="avgWin" class="stat-value positive">$0</div>
+                            </div>
+                            <div class="mini-stat">
+                                <div class="stat-label">Avg Loss</div>
+                                <div id="avgLoss" class="stat-value negative">$0</div>
+                            </div>
+                            <div class="mini-stat">
+                                <div class="stat-label">Sharpe Ratio</div>
+                                <div id="sharpeRatio" class="stat-value">--</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script>
+        const API_BASE = '/api/v1';
+        const SSE_URL = 'http://localhost:8000/api/v1/events/stream';
+        const SIGNAL_REFRESH_MS = 5000;
+
+        let state = {
+            mode: 'paper', paused: false, uptime: 0,
+            balance: 0, startingBalance: 500,
+            timeframe: '15m',
+            stats: {}, positions: [], events: [], trades: [],
+            signals: [],
+            eventSource: null, signalTimer: null,
+            dataSource: 'live', priceSymbol: 'BTC/USDT'
+        };
+
+        let equityChart = null;
+        let priceChart = null;
+        let priceTimer = null;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            initEquityChart();
+            initPriceChart();
+            connectSSE();
+            loadData();
+            loadDataSource();
+            startSignalPoll();
+            startUptimeTimer();
+            startPricePoll();
+        });
+
+        function initEquityChart() {
+            const ctx = document.getElementById('equityChart').getContext('2d');
+            equityChart = new Chart(ctx, {
+                type: 'line',
+                data: { labels: [], datasets: [{ label: 'Balance', data: [], borderColor: '#ffffff', backgroundColor: 'rgba(255,255,255,0.05)', borderWidth: 2, fill: true, tension: 0.4, pointRadius: 0 }] },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: { intersect: false, mode: 'index' },
+                    plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1a1a1a', titleColor: '#fff', bodyColor: '#a0a0a0', borderColor: '#333', borderWidth: 1, padding: 10, displayColors: false, callbacks: { label: ctx => `$${ctx.parsed.y.toFixed(2)}` } } },
+                    scales: {
+                        x: { type: 'time', time: { unit: 'hour', displayFormats: { hour: 'HH:mm' } }, grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#555', font: { size: 9, family: 'JetBrains Mono' }, maxTicksLimit: 6 }, border: { display: false } },
+                        y: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#555', font: { size: 9, family: 'JetBrains Mono' }, callback: v => `$${v.toFixed(0)}` }, border: { display: false } }
+                    }
+                }
+            });
+        }
+
+        function initPriceChart() {
+            const ctx = document.getElementById('priceChart').getContext('2d');
+            priceChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Price',
+                        data: [],
+                        borderColor: '#00ff88',
+                        backgroundColor: 'rgba(0,255,136,0.06)',
+                        borderWidth: 1.5,
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 0,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { intersect: false, mode: 'index' },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: '#1a1a1a',
+                            titleColor: '#fff',
+                            bodyColor: '#a0a0a0',
+                            borderColor: '#333',
+                            borderWidth: 1,
+                            padding: 10,
+                            displayColors: false,
+                            callbacks: {
+                                title: ctx => new Date(ctx[0].parsed.x).toLocaleString(),
+                                label: ctx => `$${ctx.parsed.y.toFixed(2)}`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: { unit: 'minute', displayFormats: { minute: 'HH:mm' } },
+                            grid: { color: 'rgba(255,255,255,0.04)' },
+                            ticks: { color: '#555', font: { size: 9, family: 'JetBrains Mono' }, maxTicksLimit: 6 },
+                            border: { display: false }
+                        },
+                        y: {
+                            grid: { color: 'rgba(255,255,255,0.04)' },
+                            ticks: { color: '#555', font: { size: 9, family: 'JetBrains Mono' }, callback: v => `$${v.toFixed(0)}` },
+                            border: { display: false }
+                        }
+                    }
+                }
+            });
+        }
+
+        function startPricePoll() {
+            loadPriceChart();
+            priceTimer = setInterval(loadPriceChart, 10000);
+        }
+
+        function onPriceSymbolChange(symbol) {
+            state.priceSymbol = symbol;
+            loadPriceChart();
+        }
+
+        async function loadPriceChart() {
+            try {
+                const tf = state.timeframe || '15m';
+                const res = await fetch(`${API_BASE}/price-history?symbol=${encodeURIComponent(state.priceSymbol)}&timeframe=${encodeURIComponent(tf)}&limit=100`);
+                const json = await res.json();
+                if (json.ok && json.data && json.data.candles) {
+                    const candles = json.data.candles;
+                    if (!candles.length) return;
+
+                    // Update live price display
+                    const last = candles[candles.length - 1];
+                    const prev = candles[candles.length - 2];
+                    document.getElementById('livePriceValue').textContent = `$${last.close.toFixed(2)}`;
+                    const change = prev ? ((last.close - prev.close) / prev.close * 100).toFixed(2) : '0.00';
+                    const sign = change >= 0 ? '+' : '';
+                    document.getElementById('livePriceValue').style.color = change >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+
+                    // Update chart
+                    priceChart.data.labels = candles.map(c => new Date(c.time));
+                    priceChart.data.datasets[0].data = candles.map(c => c.close);
+                    priceChart.update('none');
+                }
+            } catch(e) { /* silent */ }
+        }
+
+        async function loadDataSource() {
+            try {
+                const res = await fetch(`${API_BASE}/data-source`);
+                const json = await res.json();
+                if (json.ok) {
+                    state.dataSource = json.data.source;
+                    const dot = document.getElementById('dataSourceDot');
+                    const text = document.getElementById('dataSourceText');
+                    if (json.data.source === 'live') {
+                        dot.className = 'status-dot live';
+                        text.textContent = 'LIVE';
+                    } else {
+                        dot.className = 'status-dot sql';
+                        text.textContent = 'SQL';
+                    }
+                }
+            } catch(e) { /* silent */ }
+        }
+
+        function connectSSE() {
+            if (state.eventSource) state.eventSource.close();
+            console.log('[SSE] Connecting to', SSE_URL);
+            state.eventSource = new EventSource(SSE_URL);
+            state.eventSource.onopen = () => { console.log('[SSE] Connected'); updateConn(true); };
+            state.eventSource.onmessage = e => { console.log('[SSE] Message:', e.data); try { handleEvent(JSON.parse(e.data)); } catch(x) { console.error('[SSE] Parse error:', x); } };
+            state.eventSource.onerror = () => { console.error('[SSE] Error'); updateConn(false); setTimeout(connectSSE, 5000); };
+        }
+
+        function updateConn(connected) {
+            document.getElementById('statusDot').className = 'status-dot' + (connected ? '' : ' offline');
+            document.getElementById('statusText').textContent = connected ? 'Connected' : 'Reconnecting...';
+        }
+
+        function startSignalPoll() {
+            loadSignals();
+            state.signalTimer = setInterval(loadSignals, SIGNAL_REFRESH_MS);
+        }
+
+        async function loadSignals() {
+            try {
+                const res = await fetch(`${API_BASE}/signals`);
+                if (res.ok) {
+                    const json = await res.json();
+                    if (json.ok) {
+                        // New format: { timestamp, timeframe, signals: [...] }
+                        const payload = json.data;
+                        if (Array.isArray(payload)) {
+                            state.signals = payload;
+                        } else {
+                            state.signals = payload.signals || [];
+                            if (payload.timestamp) {
+                                const ts = new Date(payload.timestamp);
+                                const tsStr = ts.toLocaleTimeString();
+                                document.getElementById('signalTimestamp').textContent = `Last: ${tsStr}`;
+                            }
+                        }
+                        renderSignals();
+                    }
+                }
+            } catch(e) { /* silent */ }
+        }
+
+        function renderSignals() {
+            const body = document.getElementById('signalListBody');
+            const signals = state.signals;
+            document.getElementById('signalCount').textContent = `${signals.length} symbols`;
+
+            if (!signals.length) {
+                body.innerHTML = '<div class="no-signals">No signal data available</div>';
+                return;
+            }
+
+            body.innerHTML = '<div class="signal-list">' + signals.map(s => {
+                const probClass = s.prob >= 0.55 ? 'high' : s.prob >= 0.50 ? 'mid' : 'low';
+                const isActive = s.status === 'READY';
+                const isSkip = s.status === 'SKIPPED';
+                const itemClass = `signal-item${isSkip ? ' skipped' : ''}${isActive ? ' active' : ''}${!s.has_model ? ' no-model' : ''}`;
+
+                const badges = [];
+                if (s.indicators) {
+                    if (s.indicators.adx !== undefined) badges.push(`<span class="ind-badge ${s.indicators.adx >= 22 ? 'pass' : 'fail'}">ADX ${s.indicators.adx.toFixed(1)}</span>`);
+                    if (s.indicators.rsi !== undefined) badges.push(`<span class="ind-badge ${s.indicators.rsi >= 40 && s.indicators.rsi <= 70 ? 'pass' : s.indicators.rsi < 30 ? 'fail' : 'neutral'}">RSI ${s.indicators.rsi.toFixed(1)}</span>`);
+                    if (s.indicators.atr_pct !== undefined) badges.push(`<span class="ind-badge ${s.indicators.atr_pct >= 0.001 ? 'pass' : 'fail'}">ATR% ${(s.indicators.atr_pct*100).toFixed(3)}%</span>`);
+                    if (s.indicators.above_ema200 !== undefined) badges.push(`<span class="ind-badge ${s.indicators.above_ema200 ? 'pass' : 'fail'}">${s.indicators.above_ema200 ? '>EMA200' : '<EMA200'}</span>`);
+                    if (s.indicators.bullish_cross !== undefined) badges.push(`<span class="ind-badge ${s.indicators.bullish_cross ? 'pass' : 'neutral'}">${s.indicators.bullish_cross ? 'EMA Cross+' : 'EMA Cross-'}</span>`);
+                    if (s.indicators.regime !== undefined) badges.push(`<span class="ind-badge neutral">${s.indicators.regime}</span>`);
+                }
+
+                return `
+                <div class="${itemClass}">
+                    <div class="signal-symbol">${s.symbol || '--'}</div>
+                    <div class="signal-details">
+                        <div class="signal-indicators">${badges.join('')}</div>
+                        ${s.reason ? `<div class="signal-reason">${s.reason}</div>` : ''}
+                    </div>
+                    <div class="signal-status">
+                        <div class="signal-prob ${probClass}">${(s.prob * 100).toFixed(1)}%</div>
+                        <div class="signal-th">th: ${(s.threshold * 100).toFixed(1)}%</div>
+                        ${s.score !== undefined ? `<div class="signal-score">score: ${s.score.toFixed(3)}</div>` : ''}
+                    </div>
+                </div>`;
+            }).join('') + '</div>';
+        }
+
+        function handleEvent(event) {
+            state.events.unshift(event);
+            if (state.events.length > 100) state.events.pop();
+            renderEvents();
+            document.getElementById('eventCount').textContent = `${state.events.length} events`;
+            if (event.type === 'trade_open' || event.type === 'trade_close') loadData();
+        }
+
+        function renderEvents() {
+            const c = document.getElementById('eventsContent');
+            if (!state.events.length) { c.innerHTML = '<div class="no-events">Waiting for events...</div>'; return; }
+            c.innerHTML = state.events.slice(0, 50).map(e => `
+                <div class="event-item">
+                    <span class="event-time">${new Date(e.timestamp).toLocaleTimeString()}</span>
+                    <span class="event-type ${e.type}">${e.type.replace('_', ' ')}</span>
+                    <span class="event-msg">${e.message || ''}</span>
+                </div>`).join('');
+        }
+
+        async function loadData() {
+            await Promise.all([loadHealth(), loadStatus(), loadStats(), loadEquityCurve(), loadTrades()]);
+        }
+
+        async function loadHealth() {
+            try {
+                const r = await fetch(`${API_BASE}/health`);
+                const j = await r.json();
+                if (j.ok) { state.uptime = j.data.uptime_seconds; state.mode = j.data.mode; updateModeBadge(); }
+            } catch(e) {}
+        }
+
+        async function loadStatus() {
+            try {
+                const r = await fetch(`${API_BASE}/status`);
+                const j = await r.json();
+                if (j.ok) {
+                    state.balance = j.data.balance;
+                    state.startingBalance = j.data.starting_balance;
+                    state.positions = j.data.active_positions || [];
+                    updateBalance();
+                    renderPositions();
+                }
+            } catch(e) {}
+        }
+
+        async function loadStats() {
+            try {
+                const r = await fetch(`${API_BASE}/stats`);
+                const j = await r.json();
+                if (j.ok) { state.stats = j.data; renderStats(); }
+            } catch(e) {}
+        }
+
+        async function loadEquityCurve() {
+            try {
+                const r = await fetch(`${API_BASE}/equity-curve`);
+                const j = await r.json();
+                if (j.ok && j.data) updateChart(j.data);
+            } catch(e) {}
+        }
+
+        async function loadTrades() {
+            try {
+                const r = await fetch(`${API_BASE}/trades?limit=50`);
+                const j = await r.json();
+                if (j.ok) { state.trades = j.data; renderTrades(); }
+            } catch(e) {}
+        }
+
+        function updateBalance() {
+            document.getElementById('balanceValue').textContent = `$${state.balance.toFixed(2)}`;
+            document.getElementById('startingBalance').textContent = `Start: $${state.startingBalance.toFixed(0)}`;
+        }
+
+        function updateChart(data) {
+            if (!equityChart || !data.length) return;
+            equityChart.data.labels = data.map(d => new Date(d.timestamp));
+            equityChart.data.datasets[0].data = data.map(d => d.balance);
+            const vals = data.map(d => d.balance);
+            const min = Math.min(...vals), max = Math.max(...vals);
+            const pad = (max - min) * 0.1 || 10;
+            equityChart.options.scales.y.min = Math.max(0, min - pad);
+            equityChart.options.scales.y.max = max + pad;
+            equityChart.update('none');
+        }
+
+        function renderStats() {
+            const s = state.stats;
+            if (!s || s.total_trades === 0 || s.total_trades === undefined) return;
+            const pnlClass = s.total_pnl >= 0 ? 'positive' : 'negative';
+            document.getElementById('totalPnl').textContent = `$${s.total_pnl.toFixed(2)}`;
+            document.getElementById('totalPnl').className = `stat-value ${pnlClass}`;
+            const pnlPct = ((s.total_pnl / state.startingBalance) * 100).toFixed(2);
+            const pnlChEl = document.getElementById('totalPnlChange');
+            pnlChEl.textContent = `${s.total_pnl >= 0 ? '+' : ''}${pnlPct}%`;
+            pnlChEl.className = `stat-sub ${s.total_pnl >= 0 ? 'up' : 'down'}`;
+            document.getElementById('winRate').textContent = `${(s.win_rate * 100).toFixed(1)}%`;
+            document.getElementById('winLossCount').textContent = `${s.wins || 0}W / ${s.losses || 0}L`;
+            document.getElementById('profitFactor').textContent = (s.profit_factor || 0).toFixed(2);
+            document.getElementById('profitFactor').className = `stat-value ${(s.profit_factor || 0) >= 1 ? 'positive' : 'negative'}`;
+            document.getElementById('expectancy').textContent = `E: $${(s.expectancy || 0).toFixed(4)}`;
+            document.getElementById('maxDrawdown').textContent = `$${(s.max_drawdown || 0).toFixed(2)}`;
+            const ddPct = ((s.max_drawdown_pct || 0) * 100).toFixed(2);
+            document.getElementById('maxDrawdownPct').textContent = `${ddPct}%`;
+            document.getElementById('totalTrades').textContent = s.total_trades || 0;
+            document.getElementById('avgWin').textContent = `$${(s.avg_win || 0).toFixed(2)}`;
+            document.getElementById('avgLoss').textContent = `$${(s.avg_loss || 0).toFixed(2)}`;
+        }
+
+        function renderPositions() {
+            const c = document.getElementById('positionContent');
+            const pos = state.positions && state.positions[0];
+            if (!pos) { c.innerHTML = '<div class="pos-empty">No active position</div>'; return; }
+            const pnlClass = (pos.unrealized_pnl || 0) >= 0 ? 'positive' : 'negative';
+            const sideClass = (pos.side || 'LONG').toLowerCase();
+            c.innerHTML = `
+                <div class="pos-grid">
+                    <div class="pos-row"><span class="label">Symbol</span><span class="value">${pos.symbol || '--'}</span></div>
+                    <div class="pos-row"><span class="label">Side</span><span class="side-chip ${sideClass}">${pos.side || 'LONG'}</span></div>
+                    <div class="pos-row"><span class="label">Qty</span><span class="value">${(pos.qty || 0).toFixed(6)}</span></div>
+                    <div class="pos-row"><span class="label">Entry</span><span class="value">$${(pos.avg_entry || 0).toFixed(2)}</span></div>
+                    <div class="pos-row"><span class="label">Current</span><span class="value">$${(pos.current_price || 0).toFixed(2)}</span></div>
+                    <div class="pos-row"><span class="label">Stop</span><span class="value">${pos.stop_loss ? '$' + pos.stop_loss.toFixed(2) : '--'}</span></div>
+                    <div class="pos-row"><span class="label">TP</span><span class="value">${pos.take_profit ? '$' + pos.take_profit.toFixed(2) : '--'}</span></div>
+                </div>
+                <div class="pos-pnl ${pnlClass}">
+                    ${(pos.unrealized_pnl || 0) >= 0 ? '+' : ''}$${(pos.unrealized_pnl || 0).toFixed(2)} (${(pos.pnl_pct || 0) >= 0 ? '+' : ''}${(pos.pnl_pct || 0).toFixed(2)}%)
+                </div>`;
+        }
+
+        function renderTrades() {
+            const tb = document.getElementById('tradesBody');
+            const trades = state.trades;
+            if (!trades || !trades.length) { tb.innerHTML = '<tr><td colspan="7" class="no-trades">No trades yet</td></tr>'; return; }
+            tb.innerHTML = trades.map(t => {
+                const sideC = (t.side || 'LONG').toLowerCase();
+                const pnlC = (t.pnl || 0) >= 0 ? 'pnl-pos' : 'pnl-neg';
+                const time = t.timestamp ? new Date(t.timestamp).toLocaleString() : '--';
+                return `<tr>
+                    <td>${time}</td>
+                    <td>${t.symbol || '--'}</td>
+                    <td><span class="side-chip ${sideC}">${t.side || '--'}</span></td>
+                    <td>${t.avg_entry ? '$' + t.avg_entry.toFixed(2) : '--'}</td>
+                    <td>${t.exit_price ? '$' + t.exit_price.toFixed(2) : '--'}</td>
+                    <td class="${pnlC}">${t.pnl ? (t.pnl >= 0 ? '+' : '') + '$' + t.pnl.toFixed(2) : '--'}</td>
+                    <td>${t.exit_reason || '--'}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        function updateModeBadge() {
+            const b = document.getElementById('modeBadge');
+            b.className = `mode-badge ${state.mode}`;
+            b.textContent = state.mode.charAt(0).toUpperCase() + state.mode.slice(1);
+            ['paper','shadow','demo','live'].forEach(m => {
+                const capital = m.charAt(0).toUpperCase() + m.slice(1);
+                const btn = document.getElementById('btn' + capital);
+                if (!btn) return;
+                btn.classList.remove('btn-primary','btn-secondary','btn-danger','btn-warning');
+                if (m === 'paper') btn.classList.add('btn-primary');
+                else if (m === 'shadow') btn.classList.add('btn-secondary');
+                else if (m === 'demo') btn.classList.add('btn-warning');
+                else if (m === 'live') btn.classList.add('btn-danger');
+            });
+        }
+
+        function startUptimeTimer() {
+            setInterval(() => {
+                state.uptime++;
+                const h = Math.floor(state.uptime / 3600), m = Math.floor((state.uptime % 3600) / 60);
+                document.getElementById('uptime').textContent = `${h}h ${m}m`;
+            }, 1000);
+        }
+
+        function setMode(mode) {
+            if (mode === 'live') {
+                const today = new Date().toDateString();
+                const key = 'live_unlock_' + today;
+                if (!sessionStorage.getItem(key)) {
+                    const token = prompt(
+                        "⚠️ WARNING: Live trading executes REAL orders with REAL money.\n\n" +
+                        "Enter your LIVE_UNLOCK_TOKEN to proceed:\n\n" +
+                        "(Leave blank or cancel to stay in current mode)"
+                    );
+                    if (!token) {
+                        showToast('Live mode cancelled', 'warning');
+                        return;
+                    }
+                    fetch(`${API_BASE}/control/live-unlock?token=${encodeURIComponent(token)}`, {method:'POST'})
+                        .then(r => r.json())
+                        .then(j => {
+                            if (!j.ok) {
+                                alert('Invalid token. Live trading not enabled.');
+                                return;
+                            }
+                            sessionStorage.setItem(key, 'true');
+                            applyMode(mode);
+                        })
+                        .catch(() => {
+                            alert('Error verifying token. Live trading not enabled.');
+                        });
+                    return;
+                }
+            }
+            applyMode(mode);
+        }
+
+        function applyMode(mode) {
+            fetch(`${API_BASE}/control/mode?mode=${mode}`, {method:'POST'})
+                .then(r => r.json())
+                .then(json => {
+                    if (json.ok) {
+                        state.mode = mode;
+                        updateModeBadge();
+                        showToast(`Mode: ${mode.toUpperCase()}`, 'success');
+                    } else {
+                        showToast(`Failed: ${json.error}`, 'error');
+                    }
+                })
+                .catch(e => showToast(`Error: ${e}`, 'error'));
+        }
+
+        async function setTimeframe(tf) {
+            try {
+                const res = await fetch(`${API_BASE}/control/timeframe?timeframe=${encodeURIComponent(tf)}`, {method:'POST'});
+                const json = await res.json();
+                if (json.ok) {
+                    state.timeframe = tf;
+                    showToast(`Timeframe: ${tf}`, 'success');
+                    loadSignals(); // Refresh signals immediately with new timeframe
+                } else {
+                    showToast(`Failed: ${json.error}`, 'error');
+                }
+            } catch(e) {
+                showToast(`Error: ${e}`, 'error');
+            }
+        }
+
+        async function triggerRetrain() {
+            try {
+                const res = await fetch(`${API_BASE}/control/retrain?on_demand=true`, {method:'POST'});
+                const json = await res.json();
+                if (json.ok) {
+                    showToast('Retrain triggered', 'success');
+                } else {
+                    showToast(`Failed: ${json.error}`, 'error');
+                }
+            } catch(e) {
+                showToast(`Error: ${e}`, 'error');
+            }
+        }
+        function updateRisk(v) {
+            document.getElementById('riskValue').textContent = `${v}%`;
+            fetch(`${API_BASE}/control/risk?risk=${(v / 100).toFixed(3)}`, {method:'POST'})
+                .then(r => r.json())
+                .then(json => { if (json.ok) showToast(`Risk: ${v}%`, 'success'); else showToast(`Risk update failed`, 'error'); })
+                .catch(() => showToast(`Risk update error`, 'error'));
+        }
+        function updateMaxPos(v) {
+            document.getElementById('maxPosValue').textContent = v;
+            fetch(`${API_BASE}/control/max-positions?positions=${v}`, {method:'POST'})
+                .then(r => r.json())
+                .then(json => { if (json.ok) showToast(`Max positions: ${v}`, 'success'); else showToast(`Max positions update failed`, 'error'); })
+                .catch(() => showToast(`Max positions update error`, 'error'));
+        }
+        function updateMinProb(v) {
+            document.getElementById('minProbValue').textContent = `${v}%`;
+            fetch(`${API_BASE}/control/min-prob?prob=${(v / 100).toFixed(3)}`, {method:'POST'})
+                .then(r => r.json())
+                .then(json => { if (json.ok) showToast(`Min prob: ${v}%`, 'success'); else showToast(`Min prob update failed`, 'error'); })
+                .catch(() => showToast(`Min prob update error`, 'error'));
+        }
+        function updateCooldown(v) {
+            document.getElementById('cooldownValue').textContent = `${v}m`;
+            fetch(`${API_BASE}/control/cooldown?minutes=${v}`, {method:'POST'})
+                .then(r => r.json())
+                .then(json => { if (json.ok) showToast(`Cooldown: ${v}m`, 'success'); else showToast(`Cooldown update failed`, 'error'); })
+                .catch(() => showToast(`Cooldown update error`, 'error'));
+        }
+        function togglePause() {
+            state.paused = !state.paused;
+            const btn = document.getElementById('btnPause');
+            btn.textContent = state.paused ? 'Resume' : 'Pause';
+            btn.className = `btn ${state.paused ? 'btn-success' : 'btn-secondary'}`;
+            showToast(state.paused ? 'Trading paused' : 'Trading resumed', state.paused ? 'warning' : 'success');
+        }
+        function refreshData() { showToast('Refreshing...', 'success'); loadData(); loadSignals(); }
+
+        function showToast(msg, type = 'info') {
+            const c = document.getElementById('toastContainer');
+            const t = document.createElement('div'); t.className = `toast ${type}`;
+            const icon = type === 'success' ? '&#10003;' : type === 'error' ? '&#10007;' : '&#9432;';
+            t.innerHTML = `<span class="toast-icon">${icon}</span><span>${msg}</span>`;
+            c.appendChild(t);
+            setTimeout(() => { t.style.opacity = '0'; t.style.transform = 'translateX(20px)'; setTimeout(() => t.remove(), 300); }, 3000);
+        }
+    </script>
+</body>
+</html>

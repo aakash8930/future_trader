@@ -31,12 +31,14 @@ class UniverseManager:
         exchange_name: str = "binance",
         exchange_fallbacks: List[str] | None = None,
         exchange_timeout_ms: int = 20000,
+        demo_mode: bool = False,
     ):
         self.all_symbols = all_symbols
         self.timeframe = timeframe
         self.max_active = max_active
         self.refresh_seconds = refresh_minutes * 60
         self.last_refresh = 0.0
+        self.demo_mode = demo_mode
 
         self.active_symbols: List[str] = []
         self.active_scores: dict[str, float] = {}
@@ -52,6 +54,7 @@ class UniverseManager:
             exchange_name=exchange_name,
             exchange_fallbacks=exchange_fallbacks,
             exchange_timeout_ms=exchange_timeout_ms,
+            demo_mode=demo_mode,
         )
 
     def _scores_for_symbols(self, symbols: List[str]) -> dict[str, float]:
@@ -94,7 +97,7 @@ class UniverseManager:
         if not self.active_symbols:
             self.active_symbols = candidate_symbols
             self.active_scores = candidate_scores
-            print(f"🔄 Universe updated → {self.active_symbols}")
+            print(f"[*] Universe updated -> {self.active_symbols}")
             return self.active_symbols
 
         current_scores = self._scores_for_symbols(self.active_symbols)
@@ -116,7 +119,7 @@ class UniverseManager:
         if should_switch:
             if candidate_symbols != self.active_symbols:
                 print(
-                    f"🔄 Universe updated → {candidate_symbols} "
+                    f"[*] Universe updated -> {candidate_symbols} "
                     f"(old_score={current_total:.3f}, new_score={candidate_total:.3f})"
                 )
             self.active_symbols = candidate_symbols

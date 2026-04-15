@@ -5,6 +5,10 @@ from dataclasses import dataclass, field
 
 LIVE_UNLOCK_TOKEN = "YES_I_UNDERSTAND"
 
+# Binance API endpoints
+BINANCE_LIVE_API = "https://api.binance.com"
+BINANCE_TESTNET_API = "https://testnet.binance.vision"
+
 
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
@@ -49,8 +53,8 @@ class LiveSettings:
 
     # Strategy configuration
     strategy_min_prob: float = 0.50
-    strategy_min_adx: float = 16.0
-    strategy_min_atr_pct: float = 0.0011
+    strategy_min_adx: float = 12.0
+    strategy_min_atr_pct: float = 0.0003
     strategy_rsi_long_min: float = 42.0
     strategy_rsi_long_max: float = 66.0
     strategy_fee_pct_per_side: float = 0.0010
@@ -90,18 +94,18 @@ class LiveSettings:
             timeframe=os.getenv("TRADING_TIMEFRAME", "15m"),
             starting_balance_usdt=_env_float("PAPER_STARTING_BALANCE_USDT", 500.0),
             cooldown_minutes=_env_int("ENTRY_COOLDOWN_MINUTES", 30),
-            risk_per_trade=_env_float("RISK_PER_TRADE", 0.01),
+            risk_per_trade=_env_float("RISK_PER_TRADE", 0.05),
             max_active_positions=_env_int("MAX_ACTIVE_POSITIONS", 2),
             sleep_seconds=_env_int("LOOP_SLEEP_SECONDS", 900),
             universe_refresh_minutes=_env_int("UNIVERSE_REFRESH_MINUTES", 60),
-            require_model_quality=_env_bool("REQUIRE_MODEL_QUALITY", True),
+            require_model_quality=_env_bool("REQUIRE_MODEL_QUALITY", False),
             min_model_val_f1=_env_float("MIN_MODEL_VAL_F1", 0.10),
             min_model_val_precision=_env_float("MIN_MODEL_VAL_PRECISION", 0.10),
             min_model_val_recall=_env_float("MIN_MODEL_VAL_RECALL", 0.10),
             lookback=_env_int("LOOKBACK_BARS", 300),
             strategy_min_prob=_env_float("STRATEGY_MIN_PROB", 0.50),
-            strategy_min_adx=_env_float("STRATEGY_MIN_ADX", 16.0),
-            strategy_min_atr_pct=_env_float("STRATEGY_MIN_ATR_PCT", 0.0011),
+            strategy_min_adx=_env_float("STRATEGY_MIN_ADX", 12.0),
+            strategy_min_atr_pct=_env_float("STRATEGY_MIN_ATR_PCT", 0.0003),
             strategy_rsi_long_min=_env_float("STRATEGY_RSI_LONG_MIN", 42.0),
             strategy_rsi_long_max=_env_float("STRATEGY_RSI_LONG_MAX", 66.0),
             strategy_fee_pct_per_side=_env_float("STRATEGY_FEE_PCT_PER_SIDE", 0.0010),
@@ -119,8 +123,14 @@ class LiveSettings:
         )
 
     def validate(self) -> None:
-        if self.mode not in {"paper", "shadow", "live"}:
+        if self.mode not in {"paper", "shadow", "live", "demo"}:
             raise ValueError("Invalid TRADING_MODE")
+
+        if self.mode == "live" and os.getenv("LIVE_UNLOCK_TOKEN") != LIVE_UNLOCK_TOKEN:
+            raise ValueError(
+                "Live trading is disabled by default. To enable live trading, "
+                "set environment variable LIVE_UNLOCK_TOKEN=YES_I_UNDERSTAND"
+            )
 
         if not self.symbols:
             raise ValueError("No trading symbols configured")
@@ -136,3 +146,16 @@ class LiveSettings:
 
         if self.selector_top_k_multiplier < 1:
             raise ValueError("SELECTOR_TOP_K_MULTIPLIER must be >= 1")
+
+        if self.risk_per_trade <= 0:
+            raise ValueError("RISK_PER_TRADE must be positive")
+
+        if self.cooldown_minutes <= 0:
+            raise ValueError("ENTRY_COOLDOWN_MINUTES must be positive")
+
+        if self.sleep_seconds <= 0:
+            raise ValueError("LOOP_SLEEP_SECONDS must be positive")
+
+        valid_timeframes = {"1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"}
+        if self.timeframe not in valid_timeframes:
+            raise ValueError(f"TRADING_TIMEFRAME must be one of {valid_timeframes}")
