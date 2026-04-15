@@ -52,7 +52,12 @@
       "Bash(.venv/Scripts/python.exe -c ':*)",
       "Bash(python main.py)",
       "Read(//tmp/**)",
-      "Bash(echo \"Started, PID: $!\" sleep 15 cat C:/Users/aakas/OneDrive/Desktop/Trading/logs/run_output.txt)"
+      "Bash(echo \"Started, PID: $!\" sleep 15 cat C:/Users/aakas/OneDrive/Desktop/Trading/logs/run_output.txt)",
+      "Bash(where pip:*)",
+      "Bash(C:\\\\Users\\\\aakas\\\\OneDrive\\\\Desktop\\\\Trading\\\\.venv\\\\Scripts\\\\pip.exe install:*)",
+      "Bash(\"C:\\\\Users\\\\aakas\\\\OneDrive\\\\Desktop\\\\Trading\\\\.venv\\\\Scripts\\\\pip.exe\" install:*)",
+      "Bash(tee /tmp/pip_install.log)",
+      "Bash(C:\\\\Users\\\\aakas\\\\OneDrive\\\\Desktop\\\\Trading\\\\.venv\\\\Scripts\\\\python.exe:*)"
     ]
   }
 }
