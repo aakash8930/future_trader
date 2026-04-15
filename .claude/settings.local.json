@@ -57,7 +57,8 @@
       "Bash(C:\\\\Users\\\\aakas\\\\OneDrive\\\\Desktop\\\\Trading\\\\.venv\\\\Scripts\\\\pip.exe install:*)",
       "Bash(\"C:\\\\Users\\\\aakas\\\\OneDrive\\\\Desktop\\\\Trading\\\\.venv\\\\Scripts\\\\pip.exe\" install:*)",
       "Bash(tee /tmp/pip_install.log)",
-      "Bash(C:\\\\Users\\\\aakas\\\\OneDrive\\\\Desktop\\\\Trading\\\\.venv\\\\Scripts\\\\python.exe:*)"
+      "Bash(C:\\\\Users\\\\aakas\\\\OneDrive\\\\Desktop\\\\Trading\\\\.venv\\\\Scripts\\\\python.exe:*)",
+      "Bash(.venv/Scripts/python:*)"
     ]
   }
 }
