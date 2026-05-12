@@ -1,4 +1,4 @@
-# RUDRA-ALPHA — AI Crypto Trading System
+# ALPHASEEKER — AI Crypto Trading System
 
 A fully autonomous, AI-driven cryptocurrency trading system with regime-aware ML models, multi-symbol portfolio management, and real-time dashboard monitoring.
 

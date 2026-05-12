@@ -1,5 +1,6 @@
 #execution/multi_runner.py
 
+import os
 import signal
 import time
 import json
@@ -74,6 +75,7 @@ class MultiSymbolTradingSystem:
         if symbol in self.runners:
             return
 
+        exchange_type = os.getenv("EXCHANGE_TYPE", "cex")
         runner = TradingRunner(
             symbol=symbol,
             timeframe=self.settings.timeframe,
@@ -86,6 +88,7 @@ class MultiSymbolTradingSystem:
             exchange_name=self.settings.exchange_name,
             exchange_fallbacks=self.settings.exchange_fallbacks,
             exchange_timeout_ms=self.settings.exchange_timeout_ms,
+            exchange_type=exchange_type,
             logger=self.logger,
         )
 

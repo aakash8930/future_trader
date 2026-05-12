@@ -1,5 +1,6 @@
 #backtest/run_vector.py
 
+import os
 import sys
 from pathlib import Path
 
@@ -19,12 +20,14 @@ def run_for_symbol(symbol: str):
 
     model_dir = f"models/{symbol.replace('/', '_')}"
 
+    exchange_type = os.getenv("EXCHANGE_TYPE", "cex")
     bt = VectorBacktestEngine(
         symbol=symbol,
         timeframe="15m",
         model_path=f"{model_dir}/model.pt",
         scaler_path=f"{model_dir}/scaler.save",
         metadata_path=f"{model_dir}/metadata.json",
+        exchange_type=exchange_type,
     )
 
     df = bt.run(limit=20_000)

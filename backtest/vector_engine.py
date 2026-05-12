@@ -38,17 +38,20 @@ class VectorBacktestEngine:
         exchange_name: str = "binance",
         exchange_fallbacks: list = None,
         exchange_timeout_ms: int = 20000,
+        exchange_type: str = "cex",
     ):
         self.symbol = symbol
         self.timeframe = timeframe
         self.lookback = lookback
         self.fee_pct = fee_pct
         self.slippage_pct = slippage_pct
+        self.exchange_type = exchange_type
 
         self.data = MarketDataFetcher(
             exchange_name=exchange_name,
             fallback_exchanges=exchange_fallbacks,
             timeout_ms=exchange_timeout_ms,
+            exchange_type=exchange_type,
         )
         self.model = DirectionModel(model_path, scaler_path, metadata_path)
 

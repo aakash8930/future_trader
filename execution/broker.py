@@ -131,8 +131,9 @@ class ShadowBroker(PaperBroker):
 
 class LiveBroker:
     """
-    Executes real market orders via ccxt (spot only, LONG only).
-    Supports both Binance live trading and testnet (demo) mode.
+    Executes real market orders via ccxt for CEX exchanges.
+    Supports both Binance live trading and testnet (demo) mode for futures.
+    DEX support is planned for future implementation.
     """
 
     POSITION_STATE_PATH = Path("logs/position_state.json")
@@ -143,54 +144,77 @@ class LiveBroker:
         api_key: str,
         api_secret: str,
         testnet: bool = False,
+        exchange_type: str = "cex",
     ):
-        if exchange_name != "binance":
-            raise ValueError(f"Unsupported exchange: {exchange_name}")
+        self.exchange_type = exchange_type
+        if exchange_type == "cex":
+            if exchange_name != "binance":
+                raise ValueError(f"Unsupported CEX exchange: {exchange_name}. Currently only Binance is supported.")
 
-        self.exchange = ccxt.binance(
-            {
-                "apiKey": api_key,
-                "secret": api_secret,
-                "enableRateLimit": True,
-                "options": {"defaultType": "spot"},
-            }
-        )
+            self.exchange = ccxt.binance(
+                {
+                    "apiKey": api_key,
+                    "secret": api_secret,
+                    "enableRateLimit": True,
+                    "options": {"defaultType": "future"},
+                }
+            )
 
-        # Force testnet API URLs and enable sandbox mode
-        if testnet:
-            self.exchange.urls["api"] = {
-                "public": "https://testnet.binance.vision/api",
-                "private": "https://testnet.binance.vision/api",
-            }
-            self.exchange.set_sandbox_mode(True)
-            print(f"[BROKER] Using BINANCE TESTNET sandbox")
+            # Force testnet API URLs and enable sandbox mode
+            if testnet:
+                self.exchange.urls["api"] = {
+                    "public": "https://fapi.testnet.binance.com/fapi/v1",
+                    "private": "https://fapi.testnet.binance.com/fapi/v1",
+                }
+                self.exchange.set_sandbox_mode(True)
+                print(f"[BROKER] Using BINANCE TESTNET FUTURES")
+            else:
+                self.exchange.urls["api"] = {
+                    "public": "https://fapi.binance.com/fapi/v1",
+                    "private": "https://fapi.binance.com/fapi/v1",
+                }
+                print(f"[BROKER] Using BINANCE LIVE FUTURES")
+
+            # Load markets unconditionally - required for amount_to_precision
+            self.testnet = testnet
+            self.position: Optional[Position] = None
+            self._markets_loaded = False
+            self.symbol: Optional[str] = None
+            self._cached_stop_loss: Optional[float] = None
+            self._cached_take_profit: Optional[float] = None
+
+            # Ensure logs directory exists and resume any open position
+            self.POSITION_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            self._load_position()
+
+            # Force load markets now
+            self._ensure_markets_loaded()
+
+            # Sync open positions from exchange to prevent duplicate trades on restart
+            # Disabled for futures - relying on persistence file instead
+            # self._sync_from_exchange()
         else:
-            self.exchange.urls["api"] = {
-                "public": f"{BINANCE_LIVE_API}/api/v3",
-                "private": f"{BINANCE_LIVE_API}/api/v3",
-            }
-            print(f"[BROKER] Using BINANCE LIVE")
-
-        # Load markets unconditionally - required for amount_to_precision
-        self.testnet = testnet
-        self.position: Optional[Position] = None
-        self._markets_loaded = False
-        self.symbol: Optional[str] = None
-        self._cached_stop_loss: Optional[float] = None
-        self._cached_take_profit: Optional[float] = None
-
-        # Ensure logs directory exists and resume any open position
-        self.POSITION_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        self._load_position()
-
-        # Force load markets now
-        self._ensure_markets_loaded()
-
-        # Sync open positions from exchange to prevent duplicate trades on restart
-        self._sync_from_exchange()
+            # DEX implementation placeholder
+            self.exchange = None
+            self.exchange_name = exchange_name
+            self.testnet = testnet
+            self.position: Optional[Position] = None
+            self._markets_loaded = False
+            self.symbol: Optional[str] = None
+            self._cached_stop_loss: Optional[float] = None
+            self._cached_take_profit: Optional[float] = None
+            if exchange_type == "dex":
+                print("[BROKER] DEX support not yet implemented. Please implement DEX broker.")
+            else:
+                raise ValueError(f"Unsupported exchange_type: {exchange_type}. Supported: 'cex', 'dex'")
 
     def _ensure_markets_loaded(self):
         """Unconditionally load markets. Call this before any order operation."""
+        # DEX implementation placeholder
+        if self.exchange_type == "dex":
+            print("[BROKER] DEX market loading not yet implemented.")
+            return
+
         if self._markets_loaded:
             return
         try:
@@ -292,6 +316,11 @@ class LiveBroker:
         self._persist_position()
 
     def get_balance_usdt(self) -> float:
+        # DEX implementation placeholder
+        if self.exchange_type == "dex":
+            print("[BROKER] DEX balance fetching not yet implemented.")
+            return 0.0
+
         self._ensure_markets_loaded()
         balance = self.exchange.fetch_balance()
         return float(
@@ -301,6 +330,11 @@ class LiveBroker:
         )
 
     def _normalize_qty(self, symbol: str, qty: float) -> float:
+        # DEX implementation placeholder
+        if self.exchange_type == "dex":
+            print("[BROKER] DEX quantity normalization not yet implemented.")
+            return qty  # Placeholder - not accurate for DEX
+
         self._ensure_markets_loaded()
         qty = float(self.exchange.amount_to_precision(symbol, qty))
         min_amount = self.exchange.market(symbol).get("limits", {}).get("amount", {}).get("min")
@@ -311,11 +345,30 @@ class LiveBroker:
         return qty
 
     def _validate_notional(self, symbol: str, qty: float, price: float) -> None:
+        # DEX implementation placeholder
+        if self.exchange_type == "dex":
+            print("[BROKER] DEX notional validation not yet implemented.")
+            return
+
         min_cost = self.exchange.market(symbol).get("limits", {}).get("cost", {}).get("min")
         if min_cost and qty * price < float(min_cost):
             raise ValueError(f"Order notional too small for {symbol}")
 
     def open_position(self, side: str, price: float, qty: float, symbol: str) -> Position:
+        # DEX implementation placeholder
+        if self.exchange_type == "dex":
+            print("[BROKER] DEX order execution not yet implemented.")
+            # Return a dummy position for now - NOT FOR PRODUCTION USE
+            self.position = Position(
+                side=side,
+                entry_price=price,
+                qty=qty,
+                entry_time=datetime.utcnow(),
+            )
+            self.symbol = symbol
+            self._persist_position()
+            return self.position
+
         self._ensure_markets_loaded()
         if self.position:
             raise RuntimeError("Position already open")
@@ -344,6 +397,17 @@ class LiveBroker:
         return self.position
 
     def close_position(self, price: float, symbol: str) -> float:
+        # DEX implementation placeholder
+        if self.exchange_type == "dex":
+            print("[BROKER] DEX order execution not yet implemented.")
+            # For now, just close the position without actual exchange interaction
+            if not self.position:
+                return 0.0
+            pnl = self.position.pnl(price)
+            self.position = None
+            self._persist_position()
+            return pnl
+
         if not self.position:
             return 0.0
 

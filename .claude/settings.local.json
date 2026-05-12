@@ -58,7 +58,17 @@
       "Bash(\"C:\\\\Users\\\\aakas\\\\OneDrive\\\\Desktop\\\\Trading\\\\.venv\\\\Scripts\\\\pip.exe\" install:*)",
       "Bash(tee /tmp/pip_install.log)",
       "Bash(C:\\\\Users\\\\aakas\\\\OneDrive\\\\Desktop\\\\Trading\\\\.venv\\\\Scripts\\\\python.exe:*)",
-      "Bash(.venv/Scripts/python:*)"
+      "Bash(.venv/Scripts/python:*)",
+      "Bash(python3 *)",
+      "Bash(pkill *)",
+      "Bash(tee /tmp/output.txt)",
+      "Bash(ps *)",
+      "Bash(chmod +x *)",
+      "Bash(kill 216570 *)",
+      "Bash(mv: cannot *)",
+      "Bash(./start_trading.sh *)",
+      "Bash(Test the *)",
+      "Bash(./trading_run_20260511_180730/stop_trading.sh *)"
     ]
   }
 }

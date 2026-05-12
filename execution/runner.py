@@ -47,6 +47,7 @@ class TradingRunner:
         exchange_name: str = "binance",
         exchange_fallbacks: list[str] | None = None,
         exchange_timeout_ms: int = 20000,
+        exchange_type: str = "cex",
         logger: TradeLogger | None = None,
         event_logger=None,
     ):
@@ -55,6 +56,7 @@ class TradingRunner:
         self.lookback = lookback
         self._cached_timeframe = timeframe
         self._cached_mode = mode
+        self._cached_exchange_type = exchange_type
 
         # Poll-based config override support
         self._config_override_file = os.getenv("SHARED_STATE_FILE", "logs/shared_state.json")
@@ -76,6 +78,7 @@ class TradingRunner:
             exchange_name=exchange_name,
             fallback_exchanges=exchange_fallbacks,
             timeout_ms=exchange_timeout_ms,
+            exchange_type=exchange_type,
         )
 
         self.model = DirectionModel.for_symbol(symbol)
@@ -167,6 +170,7 @@ class TradingRunner:
                 api_key=api_key,
                 api_secret=api_secret,
                 testnet=testnet,
+                exchange_type=self._cached_exchange_type,
             )
         else:
             return ShadowBroker()

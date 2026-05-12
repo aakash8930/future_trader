@@ -254,11 +254,13 @@ def train_for_symbol(symbol: str):
     raw_fallbacks = os.getenv("EXCHANGE_FALLBACKS", "bybit,kraken,okx")
     fallbacks = [s.strip().lower() for s in raw_fallbacks.split(",") if s.strip()]
     timeout_ms = int(os.getenv("EXCHANGE_TIMEOUT_MS", "20000"))
+    exchange_type = os.getenv("EXCHANGE_TYPE", "cex")
 
     fetcher = MarketDataFetcher(
         exchange_name=exchange_name,
         fallback_exchanges=fallbacks,
         timeout_ms=timeout_ms,
+        exchange_type=exchange_type,
     )
     df = fetcher.fetch_ohlcv(symbol, TIMEFRAME, limit=CANDLES)
 
@@ -476,11 +478,13 @@ def train_lstm_for_symbol(symbol: str):
     raw_fallbacks = os.getenv("EXCHANGE_FALLBACKS", "bybit,kraken,okx")
     fallbacks = [s.strip().lower() for s in raw_fallbacks.split(",") if s.strip()]
     timeout_ms = int(os.getenv("EXCHANGE_TIMEOUT_MS", "20000"))
+    exchange_type = os.getenv("EXCHANGE_TYPE", "cex")
 
     fetcher = MarketDataFetcher(
         exchange_name=exchange_name,
         fallback_exchanges=fallbacks,
         timeout_ms=timeout_ms,
+        exchange_type=exchange_type,
     )
     df = fetcher.fetch_ohlcv(symbol, TIMEFRAME, limit=CANDLES)
     df = compute_core_features(df)
@@ -649,11 +653,13 @@ def train_xgboost_for_symbol(symbol: str):
     raw_fallbacks = os.getenv("EXCHANGE_FALLBACKS", "bybit,kraken,okx")
     fallbacks = [s.strip().lower() for s in raw_fallbacks.split(",") if s.strip()]
     timeout_ms = int(os.getenv("EXCHANGE_TIMEOUT_MS", "20000"))
+    exchange_type = os.getenv("EXCHANGE_TYPE", "cex")
 
     fetcher = MarketDataFetcher(
         exchange_name=exchange_name,
         fallback_exchanges=fallbacks,
         timeout_ms=timeout_ms,
+        exchange_type=exchange_type,
     )
     df = fetcher.fetch_ohlcv(symbol, TIMEFRAME, limit=CANDLES)
     df = compute_core_features(df)

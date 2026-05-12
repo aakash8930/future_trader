@@ -53,8 +53,10 @@ class MarketDataFetcher:
         exchange_name: str = "binance",
         fallback_exchanges: list[str] | None = None,
         timeout_ms: int = 20000,
+        exchange_type: str = "cex",
     ):
-        if MarketDataFetcher._exchange is None:
+        self.exchange_type = exchange_type
+        if MarketDataFetcher._exchange is None and exchange_type == "cex":
             if fallback_exchanges is None:
                 fallback_exchanges = ["bybit", "kraken", "okx"]
 
@@ -75,9 +77,20 @@ class MarketDataFetcher:
                     print(f"[FETCHER] Warning: could not load market symbols: {sanitized}")
                     MarketDataFetcher._supported_symbols = set()
 
-        self.exchange = MarketDataFetcher._exchange
-        self.exchange_name = MarketDataFetcher._exchange_name
-        self.supported_symbols = MarketDataFetcher._supported_symbols
+        # For DEX, we'll implement later
+        if exchange_type == "cex":
+            self.exchange = MarketDataFetcher._exchange
+            self.exchange_name = MarketDataFetcher._exchange_name
+            self.supported_symbols = MarketDataFetcher._supported_symbols
+        else:
+            # DEX implementation placeholder
+            self.exchange = None
+            self.exchange_name = exchange_name
+            self.supported_symbols = set()
+            if exchange_type == "dex":
+                print("[FETTER] DEX support not yet implemented. Please implement DEX data fetching.")
+            else:
+                raise ValueError(f"Unsupported exchange_type: {exchange_type}. Supported: 'cex', 'dex'")
 
     def _init_exchange_with_fallback(
         self,
@@ -152,7 +165,7 @@ class MarketDataFetcher:
         return exchange_class({
             "enableRateLimit": True,
             "timeout": timeout_ms,
-            "options": {"defaultType": "spot", "sandbox": False},
+            "options": {"defaultType": "future", "sandbox": False},
         })
 
     def is_symbol_supported(self, symbol: str) -> bool:
@@ -167,6 +180,11 @@ class MarketDataFetcher:
     ) -> pd.DataFrame | None:
         if not self.is_symbol_supported(symbol):
             print(f"[FETCHER] symbol {symbol} not supported on {self.exchange_name}, skipping")
+            return None
+
+        # DEX implementation placeholder
+        if self.exchange_type == "dex":
+            print("[FETTER] DEX OHLCV fetching not yet implemented.")
             return None
 
         for attempt in range(1, retries + 1):
@@ -202,6 +220,11 @@ class MarketDataFetcher:
         Uses ticker last/close/bid/ask fallback.
         """
         if not self.is_symbol_supported(symbol):
+            return None
+
+        # DEX implementation placeholder
+        if self.exchange_type == "dex":
+            print("[FETTER] DEX last price fetching not yet implemented.")
             return None
 
         for attempt in range(1, retries + 1):

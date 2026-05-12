@@ -1,5 +1,6 @@
 #main.py
 
+import os
 from config.env_loader import load_env_file
 from config.live import LiveSettings
 from execution.multi_runner import MultiSymbolTradingSystem
@@ -52,6 +53,7 @@ def main():
 
         symbol = settings.symbols[0]
 
+        exchange_type = os.getenv("EXCHANGE_TYPE", "cex")
         runner = TradingRunner(
             symbol=symbol,
             timeframe=settings.timeframe,
@@ -64,6 +66,7 @@ def main():
             exchange_name=settings.exchange_name,
             exchange_fallbacks=settings.exchange_fallbacks,
             exchange_timeout_ms=settings.exchange_timeout_ms,
+            exchange_type=exchange_type,
             logger=logger,
         )
         runner.run_loop(sleep_seconds=settings.sleep_seconds)
