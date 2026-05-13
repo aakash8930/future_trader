@@ -62,6 +62,7 @@ def main():
             starting_balance_usdt=settings.starting_balance_usdt,
             cooldown_minutes=settings.cooldown_minutes,
             risk_per_trade=settings.risk_per_trade,
+            leverage=settings.default_leverage if hasattr(settings, 'default_leverage') else 1.0,
             config=strategy_cfg,
             exchange_name=settings.exchange_name,
             exchange_fallbacks=settings.exchange_fallbacks,

@@ -21,11 +21,12 @@ class PaperBroker:
         self.db = get_db()
         # Ensure the positions table exists (migrations are run in Database.__init__)
 
-    def open_position(self, side: str, price: float, qty: float, symbol: str | None = None) -> Position:
+    def open_position(self, side: str, price: float, qty: float, symbol: str | None = None, leverage: float = 1.0) -> Position:
         self.position = Position(
             side=side,
             entry_price=price,
             qty=qty,
+            leverage=leverage,
             entry_time=datetime.utcnow(),
         )
         return self.position
@@ -194,9 +195,9 @@ class ShadowBroker(PaperBroker):
         # If we get here, no position found
         self.position = None
 
-    def open_position(self, side: str, price: float, qty: float, symbol: str | None = None) -> Position:
-        print(f"[SHADOW] OPEN {side} {symbol} qty={qty:.6f} @ {price:.2f}")
-        pos = super().open_position(side, price, qty, symbol)
+    def open_position(self, side: str, price: float, qty: float, symbol: str | None = None, leverage: float = 1.0) -> Position:
+        print(f"[SHADOW] OPEN {side} {symbol} qty={qty:.6f} @ {price:.2f} leverage={leverage:.1f}x")
+        pos = super().open_position(side, price, qty, symbol, leverage=leverage)
         self.symbol = symbol
         self._persist_position()
         return pos
@@ -523,7 +524,7 @@ class LiveBroker:
         if min_cost and qty * price < float(min_cost):
             raise ValueError(f"Order notional too small for {symbol}")
 
-    def open_position(self, side: str, price: float, qty: float, symbol: str) -> Position:
+    def open_position(self, side: str, price: float, qty: float, symbol: str, leverage: float = 1.0) -> Position:
         # DEX implementation placeholder
         if self.exchange_type == "dex":
             print("[BROKER] DEX order execution not yet implemented.")
@@ -532,6 +533,7 @@ class LiveBroker:
                 side=side,
                 entry_price=price,
                 qty=qty,
+                leverage=leverage,
                 entry_time=datetime.utcnow(),
             )
             self.symbol = symbol
@@ -559,6 +561,7 @@ class LiveBroker:
             side=side,
             entry_price=fill_price,
             qty=filled_qty,
+            leverage=leverage,
             entry_time=datetime.utcnow(),
         )
         self.symbol = symbol

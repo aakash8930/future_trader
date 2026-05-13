@@ -43,6 +43,7 @@ class TradingRunner:
         starting_balance_usdt: float = 500.0,
         cooldown_minutes: int = 30,
         risk_per_trade: float = 0.01,
+        leverage: float = 1.0,
         config: StrategyConfig | None = None,
         exchange_name: str = "binance",
         exchange_fallbacks: list[str] | None = None,
@@ -52,6 +53,7 @@ class TradingRunner:
         event_logger=None,
     ):
         self.symbol = symbol
+        self.leverage = leverage  # Position leverage (1.0-125.0)
         self.timeframe = timeframe  # original timeframe (used for CLI)
         self.lookback = lookback
         self._cached_timeframe = timeframe
@@ -396,7 +398,14 @@ class TradingRunner:
             self.event_logger.skip(symbol=self.symbol, message=f"SKIP {self.symbol}: qty_zero", reason="qty_zero")
             return
 
-        self.broker.open_position(dec.side, dec.price, qty, self.symbol)
+        # Validate leverage
+        if self.leverage < 1.0 or self.leverage > 125.0:
+            reason = f"invalid_leverage_{self.leverage}x"
+            print(f"[{self.symbol}] SKIP | {reason}")
+            self.event_logger.skip(symbol=self.symbol, message=f"SKIP {self.symbol}: {reason}", reason=reason)
+            return
+
+        self.broker.open_position(dec.side, dec.price, qty, self.symbol, leverage=self.leverage)
 
         self.last_trade_time = datetime.utcnow()
         self.last_entry_price = dec.price

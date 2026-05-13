@@ -39,6 +39,7 @@ class LiveSettings:
     starting_balance_usdt: float = 500.0
     cooldown_minutes: int = 30
     risk_per_trade: float = 0.01
+    default_leverage: float = 1.0  # Default leverage for positions (1.0-125.0)
 
     max_active_positions: int = 2
     sleep_seconds: int = 900
@@ -95,6 +96,7 @@ class LiveSettings:
             starting_balance_usdt=_env_float("PAPER_STARTING_BALANCE_USDT", 500.0),
             cooldown_minutes=_env_int("ENTRY_COOLDOWN_MINUTES", 30),
             risk_per_trade=_env_float("RISK_PER_TRADE", 0.05),
+            default_leverage=_env_float("DEFAULT_LEVERAGE", 1.0),
             max_active_positions=_env_int("MAX_ACTIVE_POSITIONS", 2),
             sleep_seconds=_env_int("LOOP_SLEEP_SECONDS", 900),
             universe_refresh_minutes=_env_int("UNIVERSE_REFRESH_MINUTES", 60),

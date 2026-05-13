@@ -15,11 +15,12 @@ class ShadowBroker:
     def __init__(self):
         self.position: Optional[Position] = None
 
-    def open_position(self, side: str, price: float, qty: float, symbol: str) -> Position:
+    def open_position(self, side: str, price: float, qty: float, symbol: str, leverage: float = 1.0) -> Position:
         self.position = Position(
             side=side,
             entry_price=price,
             qty=qty,
+            leverage=leverage,
             entry_time=datetime.utcnow(),
         )
         return self.position

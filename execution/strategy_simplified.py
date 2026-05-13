@@ -61,6 +61,10 @@ class SimplifiedStrategyConfig:
     risk_per_trade: float = 0.01  # 1% per trade
     max_open_trades: int = 1  # Only 1 position at a time (no pyramiding)
 
+    # Leverage (Futures trading)
+    default_leverage: float = 1.0  # Default leverage for positions (1.0-125.0)
+    max_leverage: float = 10.0  # Maximum allowed leverage per trade
+
 
 @dataclass
 class SimplifiedSignal:
