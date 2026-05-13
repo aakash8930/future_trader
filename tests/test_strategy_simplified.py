@@ -31,8 +31,10 @@ def create_test_df(
     close_start: float = 100.0,
     volatility: float = 0.02,
     trend: str = "up",
+    seed: int = 42,
 ) -> pd.DataFrame:
     """Create test OHLCV dataframe"""
+    np.random.seed(seed)  # Fixed seed for reproducibility
     dates = pd.date_range(start="2024-01-01", periods=length, freq="h")
     closes = [close_start]
 
