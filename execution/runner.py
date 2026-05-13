@@ -462,13 +462,31 @@ class TradingRunner:
         )
 
     def _close_position(self, price: float, exit_reason: str):
+        """Close position with proper fee and slippage accounting."""
         pos = self.broker.position
         add_count = pos.add_count
         avg_entry = pos.avg_entry
         total_qty = pos.qty
         dec = self.last_decision
 
-        pnl = self.broker.close_position(price, self.symbol)
+        # Calculate raw PnL (before fees/slippage)
+        pnl_raw = self.broker.close_position(price, self.symbol)
+        
+        # Deduct fees from PnL
+        # Entry fee (already paid when opening)
+        entry_fee_usd = avg_entry * total_qty * self.cfg.fee_pct_per_side
+        # Exit fee
+        exit_fee_usd = price * total_qty * self.cfg.fee_pct_per_side
+        total_fees_usd = entry_fee_usd + exit_fee_usd
+        
+        # Deduct slippage from PnL
+        slippage_usd = price * total_qty * self.cfg.slippage_pct_per_side
+        
+        # Net PnL after fees and slippage
+        pnl_net = pnl_raw - total_fees_usd - slippage_usd
+        
+        # Use net PnL for balance tracking
+        pnl = pnl_net
 
         self.market_guard.register_trade(pnl)
         self.risk_state.register_trade(pnl)

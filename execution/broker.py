@@ -7,6 +7,7 @@ from typing import Optional
 import ccxt
 
 from execution.position import Position
+from execution.database import get_db
 from config.live import BINANCE_LIVE_API
 
 
@@ -17,6 +18,8 @@ class PaperBroker:
 
     def __init__(self):
         self.position: Optional[Position] = None
+        self.db = get_db()
+        # Ensure the positions table exists (migrations are run in Database.__init__)
 
     def open_position(self, side: str, price: float, qty: float, symbol: str | None = None) -> Position:
         self.position = Position(
@@ -50,30 +53,84 @@ class ShadowBroker(PaperBroker):
 
     def __init__(self):
         super().__init__()
-        self._persist_path = "logs/position_state.json"
+        self.db = get_db()
+        # We no longer use the JSON file for persistence, but we keep the path for potential cleanup
+        self._persist_path = Path("logs/position_state.json")
         self._load_position()
 
     def _persist_position(self):
         if self.position is None:
-            import os
-            if os.path.exists(self._persist_path):
-                os.remove(self._persist_path)
+            # Delete the position for this symbol from the database
+            symbol = getattr(self, 'symbol', None)
+            if symbol is not None:
+                self.db.execute(
+                    "DELETE FROM positions WHERE symbol = ?;",
+                    (symbol,)
+                )
+            # Also remove the JSON file if it exists
+            if self._persist_path.exists():
+                self._persist_path.unlink(missing_ok=True)
             return
 
-        import json
-        data = {
-            "symbol": getattr(self, 'symbol', None),
-            "side": self.position.side,
-            "entry_price": self.position.entry_price,
-            "avg_entry": self.position.avg_entry,
-            "qty": self.position.qty,
-            "entry_time": self.position.entry_time.isoformat(),
-            "add_count": self.position.add_count,
-            "stop_loss": getattr(self, "_cached_stop_loss", None),
-            "take_profit": getattr(self, "_cached_take_profit", None),
-        }
-        with open(self._persist_path, "w") as f:
-            json.dump(data, f)
+        symbol = getattr(self, 'symbol', None)
+        if symbol is None:
+            # Fallback to JSON file if symbol is not available
+            import json
+            data = {
+                "symbol": self.symbol,
+                "side": self.position.side,
+                "entry_price": self.position.entry_price,
+                "avg_entry": self.position.avg_entry,
+                "qty": self.position.qty,
+                "entry_time": self.position.entry_time.isoformat(),
+                "add_count": self.position.add_count,
+                "stop_loss": getattr(self, "_cached_stop_loss", None),
+                "take_profit": getattr(self, "_cached_take_profit", None),
+            }
+            with open(self._persist_path, "w") as f:
+                json.dump(data, f)
+            return
+
+        # Upsert position into the database
+        self.db.execute("""
+            INSERT INTO positions (
+                symbol, side, entry_price, avg_entry, qty, entry_time,
+                add_count, stop_loss, take_profit, unrealized_pnl, realized_pnl,
+                last_updated, post_tp_cooldown
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            ON CONFLICT(symbol) DO UPDATE SET
+                side = excluded.side,
+                entry_price = excluded.entry_price,
+                avg_entry = excluded.avg_entry,
+                qty = excluded.qty,
+                entry_time = excluded.entry_time,
+                add_count = excluded.add_count,
+                stop_loss = excluded.stop_loss,
+                take_profit = excluded.take_profit,
+                unrealized_pnl = excluded.unrealized_pnl,
+                realized_pnl = excluded.realized_pnl,
+                last_updated = excluded.last_updated,
+                post_tp_cooldown = excluded.post_tp_cooldown;
+        """, (
+            symbol,
+            self.position.side,
+            self.position.entry_price,
+            self.position.avg_entry,
+            self.position.qty,
+            self.position.entry_time.isoformat(),
+            self.position.add_count,
+            getattr(self, "_cached_stop_loss", None),
+            getattr(self, "_cached_take_profit", None),
+            None,  # unrealized_pnl - we don't store this in the position object, compute on fetch
+            None,  # realized_pnl - only when position is closed
+            datetime.utcnow().isoformat(),
+            0      # post_tp_cooldown - we will set this elsewhere when needed
+        ))
+        # Remove the JSON file to avoid confusion
+        if self._persist_path.exists():
+            self._persist_path.unlink(missing_ok=True)
 
     def update_levels(self, stop_loss: float = None, take_profit: float = None):
         """Update and persist SL/TP levels without changing position."""
@@ -82,32 +139,60 @@ class ShadowBroker(PaperBroker):
         self._persist_position()
 
     def _load_position(self):
-        import os, json
-        if not os.path.exists(self._persist_path):
-            return
-        try:
-            with open(self._persist_path, "r") as f:
-                data = json.load(f)
-            # If SL/TP are null, the position is incomplete - clear it
-            if data.get("stop_loss") is None or data.get("take_profit") is None:
-                print(f"[SHADOW] Clearing stale position (missing SL/TP): {data.get('symbol')}")
-                os.remove(self._persist_path)
+        symbol = getattr(self, 'symbol', None)
+        if symbol is not None:
+            # Try to load position from the database
+            row = self.db.fetchone("""
+                SELECT side, entry_price, avg_entry, qty, entry_time,
+                       add_count, stop_loss, take_profit, unrealized_pnl, realized_pnl,
+                       last_updated, post_tp_cooldown
+                FROM positions
+                WHERE symbol = ?;
+            """, (symbol,))
+            if row:
+                self.position = Position(
+                    side=row['side'],
+                    entry_price=row['entry_price'],
+                    qty=row['qty'],
+                    entry_time=datetime.fromisoformat(row['entry_time']),
+                )
+                self.position.avg_entry = row['avg_entry']
+                self.position.add_count = row['add_count']
+                # Note: unrealized_pnl and realized_pnl are not stored in the Position object
+                self.symbol = symbol
+                self._cached_stop_loss = row['stop_loss']
+                self._cached_take_profit = row['take_profit']
+                print(f"[SHADOW] Restored position from database: {symbol} SL={self._cached_stop_loss:.4f} TP={self._cached_take_profit:.4f}")
                 return
-            self.position = Position(
-                side=data["side"],
-                entry_price=data["entry_price"],
-                qty=data["qty"],
-                entry_time=datetime.fromisoformat(data["entry_time"]),
-            )
-            self.position.avg_entry = data["avg_entry"]
-            self.position.add_count = data["add_count"]
-            self.symbol = data.get("symbol")
-            self._cached_stop_loss = data.get("stop_loss")
-            self._cached_take_profit = data.get("take_profit")
-            print(f"[SHADOW] Restored position: {data.get('symbol')} SL={self._cached_stop_loss:.4f} TP={self._cached_take_profit:.4f}")
-        except Exception:
-            if os.path.exists(self._persist_path):
-                os.remove(self._persist_path)
+            # If not found in database, fall back to JSON file
+        # Fallback to JSON file
+        if self._persist_path.exists():
+            try:
+                with open(self._persist_path, "r") as f:
+                    data = json.load(f)
+                # If SL/TP are null, the position is incomplete - clear it
+                if data.get("stop_loss") is None or data.get("take_profit") is None:
+                    print(f"[SHADOW] Clearing stale position (missing SL/TP): {data.get('symbol')}")
+                    self._persist_path.unlink(missing_ok=True)
+                    return
+                self.position = Position(
+                    side=data["side"],
+                    entry_price=data["entry_price"],
+                    qty=data["qty"],
+                    entry_time=datetime.fromisoformat(data["entry_time"]),
+                )
+                self.position.avg_entry = data["avg_entry"]
+                self.position.add_count = data["add_count"]
+                self.symbol = data.get("symbol")
+                self._cached_stop_loss = data.get("stop_loss")
+                self._cached_take_profit = data.get("take_profit")
+                print(f"[SHADOW] Restored position from JSON: {data.get('symbol')} SL={self._cached_stop_loss:.4f} TP={self._cached_take_profit:.4f}")
+                return
+            except Exception:
+                if self._persist_path.exists():
+                    self._persist_path.unlink(missing_ok=True)
+        # If we get here, no position found
+        self.position = None
 
     def open_position(self, side: str, price: float, qty: float, symbol: str | None = None) -> Position:
         print(f"[SHADOW] OPEN {side} {symbol} qty={qty:.6f} @ {price:.2f}")
@@ -182,6 +267,7 @@ class LiveBroker:
             self.symbol: Optional[str] = None
             self._cached_stop_loss: Optional[float] = None
             self._cached_take_profit: Optional[float] = None
+            self.db = get_db()
 
             # Ensure logs directory exists and resume any open position
             self.POSITION_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -203,6 +289,7 @@ class LiveBroker:
             self.symbol: Optional[str] = None
             self._cached_stop_loss: Optional[float] = None
             self._cached_take_profit: Optional[float] = None
+            self.db = get_db()
             if exchange_type == "dex":
                 print("[BROKER] DEX support not yet implemented. Please implement DEX broker.")
             else:
@@ -227,52 +314,134 @@ class LiveBroker:
 
     def _persist_position(self):
         if self.position is None:
+            # Delete the position for this symbol from the database
+            symbol = getattr(self, 'symbol', None)
+            if symbol is not None:
+                self.db.execute(
+                    "DELETE FROM positions WHERE symbol = ?;",
+                    (symbol,)
+                )
+            # Also remove the JSON file if it exists
             if self.POSITION_STATE_PATH.exists():
                 self.POSITION_STATE_PATH.unlink(missing_ok=True)
             return
-        data = {
-            "symbol": self.symbol,
-            "side": self.position.side,
-            "entry_price": self.position.entry_price,
-            "avg_entry": self.position.avg_entry,
-            "qty": self.position.qty,
-            "entry_time": self.position.entry_time.isoformat(),
-            "add_count": self.position.add_count,
-            "stop_loss": self._cached_stop_loss,
-            "take_profit": self._cached_take_profit,
-        }
-        self.POSITION_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.POSITION_STATE_PATH, "w") as f:
-            json.dump(data, f)
+
+        symbol = getattr(self, 'symbol', None)
+        if symbol is None:
+            # Fallback to JSON file if symbol is not available
+            data = {
+                "symbol": self.symbol,
+                "side": self.position.side,
+                "entry_price": self.position.entry_price,
+                "avg_entry": self.position.avg_entry,
+                "qty": self.position.qty,
+                "entry_time": self.position.entry_time.isoformat(),
+                "add_count": self.position.add_count,
+                "stop_loss": self._cached_stop_loss,
+                "take_profit": self._cached_take_profit,
+            }
+            self.POSITION_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.POSITION_STATE_PATH, "w") as f:
+                json.dump(data, f)
+            return
+
+        # Upsert position into the database
+        self.db.execute("""
+            INSERT INTO positions (
+                symbol, side, entry_price, avg_entry, qty, entry_time,
+                add_count, stop_loss, take_profit, unrealized_pnl, realized_pnl,
+                last_updated, post_tp_cooldown
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            ON CONFLICT(symbol) DO UPDATE SET
+                side = excluded.side,
+                entry_price = excluded.entry_price,
+                avg_entry = excluded.avg_entry,
+                qty = excluded.qty,
+                entry_time = excluded.entry_time,
+                add_count = excluded.add_count,
+                stop_loss = excluded.stop_loss,
+                take_profit = excluded.take_profit,
+                unrealized_pnl = excluded.unrealized_pnl,
+                realized_pnl = excluded.realized_pnl,
+                last_updated = excluded.last_updated,
+                post_tp_cooldown = excluded.post_tp_cooldown;
+        """, (
+            symbol,
+            self.position.side,
+            self.position.entry_price,
+            self.position.avg_entry,
+            self.position.qty,
+            self.position.entry_time.isoformat(),
+            self.position.add_count,
+            self._cached_stop_loss,
+            self._cached_take_profit,
+            None,  # unrealized_pnl
+            None,  # realized_pnl
+            datetime.utcnow().isoformat(),
+            0      # post_tp_cooldown - we will set this elsewhere when needed
+        ))
+        # Remove the JSON file to avoid confusion
+        if self.POSITION_STATE_PATH.exists():
+            self.POSITION_STATE_PATH.unlink(missing_ok=True)
 
     def _load_position(self):
-        """Load open position from logs/position_state.json on startup."""
-        import json, os
-        if not self.POSITION_STATE_PATH.exists():
-            return
-        try:
-            with open(self.POSITION_STATE_PATH, "r") as f:
-                data = json.load(f)
-            # If SL/TP are null, the position is incomplete - clear it
-            if data.get("stop_loss") is None or data.get("take_profit") is None:
-                print(f"[BROKER] Clearing stale position (missing SL/TP): {data.get('symbol')}")
-                self.POSITION_STATE_PATH.unlink(missing_ok=True)
+        """Load open position from database on startup, falling back to JSON file."""
+        symbol = getattr(self, 'symbol', None)
+        if symbol is not None:
+            # Try to load position from the database
+            row = self.db.fetchone("""
+                SELECT side, entry_price, avg_entry, qty, entry_time,
+                       add_count, stop_loss, take_profit, unrealized_pnl, realized_pnl,
+                       last_updated, post_tp_cooldown
+                FROM positions
+                WHERE symbol = ?;
+            """, (symbol,))
+            if row:
+                self.position = Position(
+                    side=row['side'],
+                    entry_price=row['entry_price'],
+                    qty=row['qty'],
+                    entry_time=datetime.fromisoformat(row['entry_time']),
+                )
+                self.position.avg_entry = row['avg_entry']
+                self.position.add_count = row['add_count']
+                # Note: unrealized_pnl and realized_pnl are not stored in the Position object
+                self.symbol = symbol
+                self._cached_stop_loss = row['stop_loss']
+                self._cached_take_profit = row['take_profit']
+                print(f"[BROKER] Restored position from database: {symbol} SL={self._cached_stop_loss:.4f} TP={self._cached_take_profit:.4f}")
                 return
-            self.position = Position(
-                side=data["side"],
-                entry_price=data["entry_price"],
-                qty=data["qty"],
-                entry_time=datetime.fromisoformat(data["entry_time"]),
-            )
-            self.position.avg_entry = data["avg_entry"]
-            self.position.add_count = data["add_count"]
-            self.symbol = data.get("symbol")
-            self._cached_stop_loss = data.get("stop_loss")
-            self._cached_take_profit = data.get("take_profit")
-            print(f"[BROKER] Restored position: {data.get('symbol')} SL={self._cached_stop_loss:.4f} TP={self._cached_take_profit:.4f}")
-        except Exception:
-            if self.POSITION_STATE_PATH.exists():
-                self.POSITION_STATE_PATH.unlink(missing_ok=True)
+            # If not found in database, fall back to JSON file
+        # Fallback to JSON file
+        if self.POSITION_STATE_PATH.exists():
+            try:
+                with open(self.POSITION_STATE_PATH, "r") as f:
+                    data = json.load(f)
+                # If SL/TP are null, the position is incomplete - clear it
+                if data.get("stop_loss") is None or data.get("take_profit") is None:
+                    print(f"[BROKER] Clearing stale position (missing SL/TP): {data.get('symbol')}")
+                    self.POSITION_STATE_PATH.unlink(missing_ok=True)
+                    return
+                self.position = Position(
+                    side=data["side"],
+                    entry_price=data["entry_price"],
+                    qty=data["qty"],
+                    entry_time=datetime.fromisoformat(data["entry_time"]),
+                )
+                self.position.avg_entry = data["avg_entry"]
+                self.position.add_count = data["add_count"]
+                self.symbol = data.get("symbol")
+                self._cached_stop_loss = data.get("stop_loss")
+                self._cached_take_profit = data.get("take_profit")
+                print(f"[BROKER] Restored position from JSON: {data.get('symbol')} SL={self._cached_stop_loss:.4f} TP={self._cached_take_profit:.4f}")
+                return
+            except Exception:
+                if self.POSITION_STATE_PATH.exists():
+                    self.POSITION_STATE_PATH.unlink(missing_ok=True)
+        # If we get here, no position found
+        self.position = None
 
     def _sync_from_exchange(self):
         """Fetch open positions from exchange and restore into broker state. Prevents duplicate trades on restart."""

@@ -17,6 +17,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
+from train.ml_validator import MLValidator, validate_symbol_for_training
+
 
 def _load_project_modules():
     from data.fetcher import MarketDataFetcher
@@ -49,6 +51,13 @@ TRANSFER_LR_MULT = float(os.getenv("TRANSFER_LR_MULT", "0.1"))
 SEQUENCE_WINDOW = int(os.getenv("SEQUENCE_WINDOW", "16"))
 SHARPE_RETURN_TP = float(os.getenv("SHARPE_RETURN_TP", "0.03"))
 SHARPE_RETURN_SL = float(os.getenv("SHARPE_RETURN_SL", "0.02"))
+
+# ML Validation Gates (prevent overfit/garbage models)
+ML_MIN_F1 = float(os.getenv("ML_MIN_F1", "0.50"))
+ML_MIN_PRECISION = float(os.getenv("ML_MIN_PRECISION", "0.55"))
+ML_MIN_RECALL = float(os.getenv("ML_MIN_RECALL", "0.40"))
+ML_MIN_SAMPLES = int(os.getenv("ML_MIN_SAMPLES", "100"))
+ML_VALIDATION_ENABLED = os.getenv("ML_VALIDATION_ENABLED", "true").lower() == "true"
 
 FEATURE_COLUMNS = [
     # Original 13
@@ -437,6 +446,37 @@ def train_for_symbol(symbol: str):
     )
 
     # -------------------------
+    # ML VALIDATION GATES
+    # -------------------------
+    if ML_VALIDATION_ENABLED:
+        validator = MLValidator(
+            min_f1=ML_MIN_F1,
+            min_precision=ML_MIN_PRECISION,
+            min_recall=ML_MIN_RECALL,
+            min_samples=ML_MIN_SAMPLES,
+        )
+        is_valid, val_report = validator.validate_predictions(
+            y_val_labels,
+            val_pred_labels,
+            y_pred_proba=val_probs,
+            symbol=symbol,
+        )
+
+        print(f"\n[ML VALIDATION] Report for {symbol}:")
+        if is_valid:
+            print(f"  ✓ Model PASSED validation gates!")
+        else:
+            print(f"  ✗ Model FAILED validation gates:")
+            for failure in val_report["failures"]:
+                print(f"    - {failure}")
+
+        if not is_valid:
+            print(f"\n[SKIPPING] {symbol}: Model rejected by validation gates")
+            return False
+
+        metrics["validation_report"] = val_report
+
+    # -------------------------
     # SAVE
     # -------------------------
     folder = f"models/{symbol.replace('/', '_')}"
@@ -467,6 +507,7 @@ def train_for_symbol(symbol: str):
         json.dump(metadata, f, indent=2)
 
     print(f"[DONE] Saved {MODEL_NAME} {MODEL_VERSION} to {folder}")
+    return True
 
 
 def train_lstm_for_symbol(symbol: str):

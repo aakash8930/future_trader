@@ -68,7 +68,8 @@
       "Bash(mv: cannot *)",
       "Bash(./start_trading.sh *)",
       "Bash(Test the *)",
-      "Bash(./trading_run_20260511_180730/stop_trading.sh *)"
+      "Bash(./trading_run_20260511_180730/stop_trading.sh *)",
+      "Bash(grep -E \"\\\\.\\(db|sqlite|sqlite3\\)$\")"
     ]
   }
 }
