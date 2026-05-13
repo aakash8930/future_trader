@@ -8,9 +8,13 @@ class RiskLimits:
         self,
         max_daily_loss_pct: float = 0.03,
         max_consecutive_losses: int = 3,
+        max_long_leverage: float = 5.0,
+        max_short_leverage: float = 3.0,
     ):
         self.max_daily_loss_pct = max_daily_loss_pct
         self.max_consecutive_losses = max_consecutive_losses
+        self.max_long_leverage = max_long_leverage
+        self.max_short_leverage = max_short_leverage
 
 
 class RiskState:

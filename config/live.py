@@ -32,7 +32,7 @@ def _env_str(name: str, default: str) -> str:
 @dataclass(slots=True)
 class LiveSettings:
     mode: str = "paper"
-    symbols: list[str] = field(default_factory=lambda: ["BTC/USDT"])
+    symbols: list[str] = field(default_factory=lambda: ["BTC/USDT", "ETH/USDT"])
     excluded_symbols: list[str] = field(default_factory=list)
     timeframe: str = "15m"
 
@@ -40,6 +40,8 @@ class LiveSettings:
     cooldown_minutes: int = 30
     risk_per_trade: float = 0.01
     default_leverage: float = 1.0  # Default leverage for positions (1.0-125.0)
+    max_long_leverage: float = 3.0
+    max_short_leverage: float = 2.0
 
     max_active_positions: int = 2
     sleep_seconds: int = 900
@@ -77,8 +79,10 @@ class LiveSettings:
 
     @classmethod
     def from_env(cls) -> "LiveSettings":
-        raw_symbols = os.getenv("TRADING_SYMBOLS", "BTC/USDT")
+        raw_symbols = os.getenv("TRADING_SYMBOLS", "BTC/USDT,ETH/USDT")
         symbols = [s.strip().upper() for s in raw_symbols.split(",") if s.strip()]
+        if not symbols:
+            symbols = ["BTC/USDT", "ETH/USDT"]
 
         raw_excluded = os.getenv("EXCLUDED_SYMBOLS", "")
         excluded = [s.strip().upper() for s in raw_excluded.split(",") if s.strip()]
@@ -97,6 +101,8 @@ class LiveSettings:
             cooldown_minutes=_env_int("ENTRY_COOLDOWN_MINUTES", 30),
             risk_per_trade=_env_float("RISK_PER_TRADE", 0.05),
             default_leverage=_env_float("DEFAULT_LEVERAGE", 1.0),
+            max_long_leverage=_env_float("MAX_LONG_LEVERAGE", 3.0),
+            max_short_leverage=_env_float("MAX_SHORT_LEVERAGE", 2.0),
             max_active_positions=_env_int("MAX_ACTIVE_POSITIONS", 2),
             sleep_seconds=_env_int("LOOP_SLEEP_SECONDS", 900),
             universe_refresh_minutes=_env_int("UNIVERSE_REFRESH_MINUTES", 60),
@@ -151,6 +157,12 @@ class LiveSettings:
 
         if self.risk_per_trade <= 0:
             raise ValueError("RISK_PER_TRADE must be positive")
+
+        if self.max_long_leverage < 1.0 or self.max_short_leverage < 1.0:
+            raise ValueError("MAX_LONG_LEVERAGE and MAX_SHORT_LEVERAGE must be >= 1")
+
+        if self.default_leverage > min(self.max_long_leverage, self.max_short_leverage):
+            raise ValueError("DEFAULT_LEVERAGE must not exceed the configured long/short leverage caps")
 
         if self.cooldown_minutes <= 0:
             raise ValueError("ENTRY_COOLDOWN_MINUTES must be positive")

@@ -12,6 +12,7 @@ from execution.strategy_simplified import (
     SimplifiedStrategyEngine,
     SimplifiedSignal,
 )
+from execution.position import Side
 
 
 class MockModel:
@@ -93,7 +94,7 @@ class TestSimplifiedStrategyEngine:
 
         signal = engine.generate_signal("BTC/USDT", df)
 
-        assert signal.side is None
+        assert signal.side == Side.NONE
         assert "Insufficient data" in signal.reason
 
     def test_volatility_gate_low(self):
@@ -106,7 +107,7 @@ class TestSimplifiedStrategyEngine:
 
         signal = engine.generate_signal("BTC/USDT", df)
 
-        assert signal.side is None
+        assert signal.side == Side.NONE
         assert "Volatility" in signal.reason or "Confidence" in signal.reason
 
     def test_volatility_gate_high(self):
@@ -119,7 +120,7 @@ class TestSimplifiedStrategyEngine:
 
         signal = engine.generate_signal("BTC/USDT", df)
 
-        assert signal.side is None
+        assert signal.side == Side.NONE
         assert "Volatility" in signal.reason or "Confidence" in signal.reason
 
     def test_trend_filter_up(self):
@@ -156,8 +157,8 @@ class TestSimplifiedStrategyEngine:
 
         signal = engine.generate_signal("BTC/USDT", df)
 
-        assert signal.side is None
-        assert "Confidence" in signal.reason
+        assert signal.side == Side.NONE
+        assert "No trade" in signal.reason
 
     def test_model_confidence_high_long(self):
         """Test LONG signal with high confidence"""
@@ -169,8 +170,7 @@ class TestSimplifiedStrategyEngine:
 
         signal = engine.generate_signal("BTC/USDT", df)
 
-        # Signal may still be rejected by filters, but confidence should be high
-        if signal.side is not None:
+        if signal.side == Side.LONG:
             assert signal.confidence >= 0.55
 
     def test_model_confidence_high_short(self):
@@ -204,7 +204,7 @@ class TestSimplifiedStrategyEngine:
 
         if signal1.side is not None:
             # Signal 2 should be rejected due to cooldown
-            assert signal2.side is None or "Cooldown" in signal2.reason
+            assert signal2.side == Side.NONE or "Cooldown" in signal2.reason
 
     def test_exit_levels_long(self):
         """Test exit level calculation for LONG"""
@@ -222,7 +222,7 @@ class TestSimplifiedStrategyEngine:
 
         signal = engine.generate_signal("BTC/USDT", df)
 
-        if signal.side == "LONG":
+        if signal.side == Side.LONG:
             expected_sl = entry - atr * 1.5
             expected_tp = entry + atr * 3.0
 
@@ -245,7 +245,7 @@ class TestSimplifiedStrategyEngine:
 
         signal = engine.generate_signal("BTC/USDT", df)
 
-        if signal.side == "SHORT":
+        if signal.side == Side.SHORT:
             expected_sl = entry + atr * 1.5
             expected_tp = entry - atr * 3.0
 
@@ -300,7 +300,7 @@ class TestSimplifiedStrategyEngine:
         signal = engine.generate_signal("BTC/USDT", df)
 
         assert signal.symbol == "BTC/USDT"
-        assert signal.side is None
+        assert signal.side == Side.NONE
         assert signal.confidence == 0.0
         assert isinstance(signal.reason, str)
 
@@ -327,6 +327,6 @@ class TestSimplifiedStrategyEngine:
 
         signal = engine.generate_signal("BTC/USDT", df)
 
-        # Should not crash
         assert signal.symbol == "BTC/USDT"
-        assert signal.confidence == 0.5
+        assert signal.side == Side.NONE
+        assert signal.confidence == 0.0

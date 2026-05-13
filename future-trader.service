@@ -1,0 +1,22 @@
+[Unit]
+Description=Future Trader Autonomous Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aakash
+WorkingDirectory=/home/aakash/Trading/future_trading/future_trader
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/aakash/Trading/future_trading/future_trader
+EnvironmentFile=/home/aakash/Trading/future_trading/future_trader/.env
+ExecStart=/home/aakash/Trading/future_trading/future_trader/scripts/start.sh
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=45
+StandardOutput=append:/home/aakash/Trading/future_trading/future_trader/logs/trading.log
+StandardError=append:/home/aakash/Trading/future_trading/future_trader/logs/error.log
+
+[Install]
+WantedBy=multi-user.target

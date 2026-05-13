@@ -1,8 +1,25 @@
-# execution/position.py
+"""Position model with bidirectional side support."""
 
+from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+
+
+class Side(str, Enum):
+    LONG = "LONG"
+    SHORT = "SHORT"
+    NONE = "NONE"
+
+
+def coerce_side(value: Side | str) -> Side:
+    if isinstance(value, Side):
+        return value
+
+    normalized = str(value).strip().upper()
+    if normalized in {"LONG", "SHORT", "NONE"}:
+        return Side[normalized]
+
+    raise ValueError(f"Invalid side: {value}")
 
 
 @dataclass
@@ -14,7 +31,7 @@ class Position:
     NOTE: This class calculates RAW PnL (before fees/slippage).
     All fees and slippage are handled in the runner/broker layer.
     """
-    side: str            # "LONG" or "SHORT"
+    side: Side | str            # "LONG" or "SHORT"
     entry_price: float   # initial entry price (kept for reference)
     qty: float
     entry_time: datetime
@@ -23,6 +40,9 @@ class Position:
     add_count: int = field(default=0)      # number of pyramid adds so far
 
     def __post_init__(self):
+        self.side = coerce_side(self.side)
+        if self.side == Side.NONE:
+            raise ValueError("Invalid side: NONE")
         self.avg_entry = self.entry_price
         # Validate leverage
         if self.leverage < 1.0 or self.leverage > 125.0:
@@ -71,9 +91,9 @@ class Position:
                 f"avg_entry={self.avg_entry}, qty={self.qty}"
             )
         
-        if self.side == "LONG":
+        if self.side == Side.LONG:
             raw_pnl = (exit_price - self.avg_entry) * self.qty
-        elif self.side == "SHORT":
+        elif self.side == Side.SHORT:
             raw_pnl = (self.avg_entry - exit_price) * self.qty
         else:
             raise ValueError(f"Invalid side: {self.side}")
@@ -97,6 +117,6 @@ class Position:
 
     def __repr__(self) -> str:
         return (
-            f"Position({self.side}, qty={self.qty:.6f}, "
+            f"Position({self.side.value}, qty={self.qty:.6f}, "
             f"entry={self.avg_entry:.4f}, leverage={self.leverage}x)"
         )

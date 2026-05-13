@@ -10,6 +10,7 @@ from data.fetcher import MarketDataFetcher
 from execution.ai_supervisor import AISupervisor
 from execution.market_guard import MarketGuard
 from execution.regime_controller import RegimeController
+from execution.health_reporter import ServiceHealthReporter
 import os
 
 from execution.broker import LiveBroker, ShadowBroker
@@ -21,6 +22,7 @@ from logs.event_logger import get_event_logger
 from metrics.self_report import DailyAIReport
 from models.direction import DirectionModel
 from models.ensemble import EnsembleDirectionModel
+from execution.position import Side
 from risk.limits import RiskLimits, RiskState
 from config.shared_state import get_shared_state, update_shared_state
 
@@ -128,6 +130,7 @@ class TradingRunner:
         self.logger = logger if logger is not None else TradeLogger()
         self.event_logger = event_logger if event_logger is not None else get_event_logger()
         self.report = DailyAIReport()
+        self.health = ServiceHealthReporter()
 
         self.cooldown = timedelta(minutes=cooldown_minutes)
         self.last_trade_time: datetime | None = None
@@ -151,11 +154,32 @@ class TradingRunner:
             self.last_entry_side = self.broker.position.side
             # Calculate take_profit_1 (50% of TP distance) for restored position
             if self.last_entry_price and self.take_profit:
-                tp_distance = self.take_profit - self.last_entry_price
-                self.take_profit_1 = self.last_entry_price + (tp_distance / 2.0)
+                side_label = getattr(self.last_entry_side, "value", self.last_entry_side)
+                if side_label == Side.SHORT.value:
+                    tp_distance = self.last_entry_price - self.take_profit
+                    self.take_profit_1 = self.last_entry_price - (tp_distance / 2.0)
+                else:
+                    tp_distance = self.take_profit - self.last_entry_price
+                    self.take_profit_1 = self.last_entry_price + (tp_distance / 2.0)
             print(f"[RESTORED] {symbol} position: entry={self.last_entry_price:.4f}, SL={self.stop_loss:.4f}, TP={self.take_profit:.4f}, TP1={self.take_profit_1:.4f}")
 
         print(f"[AUTONOMOUS AI] {symbol} ready (mode={self._cached_mode}, timeframe={self._cached_timeframe})")
+
+    def _last_candle_iso(self) -> str | None:
+        if self.last_processed_candle_time is None:
+            return None
+        return self.last_processed_candle_time.isoformat()
+
+    def _update_health(self, status: str, exchange_connected: bool):
+        open_positions = 1 if self.broker.position else 0
+        self.health.write(
+            status=status,
+            balance=self.risk_state.current_balance,
+            exchange_connected=exchange_connected,
+            open_positions=open_positions,
+            last_candle_time=self._last_candle_iso(),
+            extra={"symbol": self.symbol, "mode": self._cached_mode},
+        )
 
     def _create_broker(self, mode: str, exchange_name: str):
         """Create broker for the given mode."""
@@ -335,6 +359,8 @@ class TradingRunner:
         manage_price = live_price if live_price is not None else closed_price
 
         if self.broker.position:
+            position_side = getattr(self.broker.position.side, "value", self.broker.position.side)
+
             # Guard: skip management if TP/SL not yet initialized
             if self.take_profit_1 is None or self.stop_loss is None or self.take_profit is None:
                 print(
@@ -343,33 +369,62 @@ class TradingRunner:
                 )
                 return
 
-            if not self._profit_lock_activated and manage_price >= self.take_profit_1:
-                self._profit_lock_activated = True
-                profit_lock_sl = self.last_entry_price + atr * 0.5
-                self.stop_loss = max(self.stop_loss, profit_lock_sl)
-                if hasattr(self.broker, 'update_levels'):
-                    self.broker.update_levels(stop_loss=self.stop_loss, take_profit=self.take_profit)
-                print(
-                    f"[{self.symbol}] TP1 HIT | "
-                    f"manage_price={_fmt_price(manage_price, self.symbol)} | "
-                    f"lock_sl={_fmt_price(self.stop_loss, self.symbol)}"
-                )
-
-            if self._profit_lock_activated:
-                new_sl = manage_price - self.cfg.trail_atr_mult * atr
-                if new_sl > self.stop_loss:
-                    self.stop_loss = new_sl
+            if position_side == Side.LONG.value:
+                if not self._profit_lock_activated and manage_price >= self.take_profit_1:
+                    self._profit_lock_activated = True
+                    profit_lock_sl = self.last_entry_price + atr * 0.5
+                    self.stop_loss = max(self.stop_loss, profit_lock_sl)
                     if hasattr(self.broker, 'update_levels'):
                         self.broker.update_levels(stop_loss=self.stop_loss, take_profit=self.take_profit)
-                    print(f"[{self.symbol}] TRAILING SL | {_fmt_price(self.stop_loss, self.symbol)}")
+                    print(
+                        f"[{self.symbol}] TP1 HIT | "
+                        f"manage_price={_fmt_price(manage_price, self.symbol)} | "
+                        f"lock_sl={_fmt_price(self.stop_loss, self.symbol)}"
+                    )
 
-            if manage_price <= self.stop_loss:
-                self._close_position(manage_price, "stop_loss")
-                return
+                if self._profit_lock_activated:
+                    new_sl = manage_price - self.cfg.trail_atr_mult * atr
+                    if new_sl > self.stop_loss:
+                        self.stop_loss = new_sl
+                        if hasattr(self.broker, 'update_levels'):
+                            self.broker.update_levels(stop_loss=self.stop_loss, take_profit=self.take_profit)
+                        print(f"[{self.symbol}] TRAILING SL | {_fmt_price(self.stop_loss, self.symbol)}")
 
-            if manage_price >= self.take_profit:
-                self._close_position(manage_price, "take_profit")
-                return
+                if manage_price <= self.stop_loss:
+                    self._close_position(manage_price, "stop_loss")
+                    return
+
+                if manage_price >= self.take_profit:
+                    self._close_position(manage_price, "take_profit")
+                    return
+            else:
+                if not self._profit_lock_activated and manage_price <= self.take_profit_1:
+                    self._profit_lock_activated = True
+                    profit_lock_sl = self.last_entry_price - atr * 0.5
+                    self.stop_loss = min(self.stop_loss, profit_lock_sl)
+                    if hasattr(self.broker, 'update_levels'):
+                        self.broker.update_levels(stop_loss=self.stop_loss, take_profit=self.take_profit)
+                    print(
+                        f"[{self.symbol}] TP1 HIT | "
+                        f"manage_price={_fmt_price(manage_price, self.symbol)} | "
+                        f"lock_sl={_fmt_price(self.stop_loss, self.symbol)}"
+                    )
+
+                if self._profit_lock_activated:
+                    new_sl = manage_price + self.cfg.trail_atr_mult * atr
+                    if new_sl < self.stop_loss:
+                        self.stop_loss = new_sl
+                        if hasattr(self.broker, 'update_levels'):
+                            self.broker.update_levels(stop_loss=self.stop_loss, take_profit=self.take_profit)
+                        print(f"[{self.symbol}] TRAILING SL | {_fmt_price(self.stop_loss, self.symbol)}")
+
+                if manage_price >= self.stop_loss:
+                    self._close_position(manage_price, "stop_loss")
+                    return
+
+                if manage_price <= self.take_profit:
+                    self._close_position(manage_price, "take_profit")
+                    return
 
             return
 
@@ -378,7 +433,7 @@ class TradingRunner:
 
         dec = self.strategy.generate_signal(df, regime=str(regime))
 
-        if not dec.side:
+        if not dec.side or getattr(dec.side, "value", dec.side) == Side.NONE.value:
             reason = dec.reason
             print(f"[{self.symbol}] SKIP | {reason}")
             self.event_logger.skip(symbol=self.symbol, message=f"SKIP {self.symbol}: {reason}", reason=reason)
@@ -405,12 +460,12 @@ class TradingRunner:
             self.event_logger.skip(symbol=self.symbol, message=f"SKIP {self.symbol}: {reason}", reason=reason)
             return
 
-        self.broker.open_position(dec.side, dec.price, qty, self.symbol, leverage=self.leverage)
+        self.broker.open_position(getattr(dec.side, "value", dec.side), dec.price, qty, self.symbol, leverage=self.leverage)
 
         self.last_trade_time = datetime.utcnow()
         self.last_entry_price = dec.price
         self.last_entry_prob = dec.prob
-        self.last_entry_side = dec.side
+        self.last_entry_side = getattr(dec.side, "value", dec.side)
         self.last_decision = dec
         self.stop_loss = dec.stop_loss
         self.take_profit = dec.take_profit
@@ -427,7 +482,7 @@ class TradingRunner:
             open_record = {
                 "timestamp": ts,
                 "symbol": self.symbol,
-                "side": dec.side,
+                "side": getattr(dec.side, "value", dec.side),
                 "entry_price": dec.price,
                 "avg_entry": dec.price,
                 "exit_price": 0.0,
@@ -453,8 +508,8 @@ class TradingRunner:
         # Emit live event for trade open
         self.event_logger.trade_open(
             symbol=self.symbol,
-            message=f"OPEN {dec.side} {self.symbol} qty={qty:.6f} @ {dec.price:.4f}",
-            side=dec.side,
+            message=f"OPEN {getattr(dec.side, 'value', dec.side)} {self.symbol} qty={qty:.6f} @ {dec.price:.4f}",
+            side=getattr(dec.side, "value", dec.side),
             entry_price=dec.price,
             qty=qty,
             prob=dec.prob,
@@ -463,7 +518,7 @@ class TradingRunner:
         )
 
         print(
-            f"[^^] OPEN {dec.side} {self.symbol} | "
+            f"[^^] OPEN {getattr(dec.side, 'value', dec.side)} {self.symbol} | "
             f"price={_fmt_price(dec.price, self.symbol)} | qty={qty:.6f} | "
             f"SL={_fmt_price(dec.stop_loss, self.symbol)} | "
             f"TP={_fmt_price(dec.take_profit, self.symbol)} | "
@@ -590,13 +645,16 @@ class TradingRunner:
             while True:
                 try:
                     self.run_once()
+                    self._update_health(status="healthy", exchange_connected=True)
                 except KeyboardInterrupt:
                     print(f"[{self.symbol}] Stopped by user")
+                    self._update_health(status="stopped", exchange_connected=True)
                     break
                 except Exception as exc:
                     import traceback
                     print(f"[{self.symbol}] run error: {exc}")
                     print(f"[{self.symbol}] traceback: {traceback.format_exc()[-500:]}")
+                    self._update_health(status="degraded", exchange_connected=False)
                 time.sleep(sleep_seconds)
         finally:
             signal.signal(signal.SIGINT, old_sigint)

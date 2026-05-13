@@ -371,7 +371,7 @@ All configuration is via environment variables (`.env`). Key knobs:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `TRADING_MODE` | `shadow` | `paper` \| `shadow` \| `live` |
-| `TRADING_SYMBOLS` | `BTC/USDT` | Comma-separated symbol list |
+| `TRADING_SYMBOLS` | `BTC/USDT,ETH/USDT,SOL/USDT` | Static production symbol whitelist |
 | `TRADING_TIMEFRAME` | `5m` | Candle timeframe |
 | `LOOKBACK_BARS` | `300` | Historical bars for feature computation |
 
@@ -400,5 +400,106 @@ All configuration is via environment variables (`.env`). Key knobs:
 | `TRAIN_HORIZON` | `12` | Triple-barrier look-ahead (bars) |
 | `TRAIN_STOP_ATR_MULT` | `2.0` | Stop loss ATR multiple |
 | `TRAIN_TAKE_ATR_MULT` | `3.0` | Take profit ATR multiple |
-#   t r a d e r  
- 
+
+---
+
+## Production Runtime (systemd)
+
+This project now runs as a deterministic Linux service using `systemd` with:
+
+- single entrypoint: `main.py`
+- no `nohup`
+- no PID files
+- no dynamic `trading_run_*` directories
+- no startup-time auto training
+- no startup-time symbol discovery
+
+### Runtime Layout
+
+```
+future_trader/
+├── main.py
+├── logs/
+│   ├── trading.log
+│   ├── error.log
+│   └── structured.jsonl
+├── runtime/
+│   └── health.json
+├── scripts/
+│   ├── start.sh
+│   ├── stop.sh
+│   ├── restart.sh
+│   └── status.sh
+└── future-trader.service
+```
+
+### Install Service
+
+```bash
+cd /home/aakash/Trading/future_trading/future_trader
+chmod +x scripts/*.sh start_trading.sh stop_trading.sh
+sudo cp future-trader.service /etc/systemd/system/future-trader.service
+sudo systemctl daemon-reload
+sudo systemctl enable future-trader.service
+```
+
+### Service Operations
+
+```bash
+sudo systemctl start future-trader.service
+sudo systemctl stop future-trader.service
+sudo systemctl restart future-trader.service
+sudo systemctl status future-trader.service
+```
+
+Or use wrappers:
+
+```bash
+./scripts/stop.sh
+./scripts/restart.sh
+./scripts/status.sh
+```
+
+### Logs
+
+```bash
+tail -f logs/trading.log
+tail -f logs/error.log
+tail -f logs/structured.jsonl
+```
+
+### Health File
+
+`runtime/health.json` is updated from trading loops and includes:
+
+- `status`
+- `uptime`
+- `balance`
+- `exchange_connected`
+- `open_positions`
+- `last_candle_time`
+
+### Manual Training Workflow (Separate from Runtime)
+
+Model training is intentionally decoupled from service startup.
+
+```bash
+TRAIN_SYMBOLS=BTC/USDT,ETH/USDT,SOL/USDT python -m train.train_direction_model
+```
+
+---
+
+## Validation Checklist
+
+Use this checklist after deployment:
+
+- `systemctl start future-trader.service` starts successfully
+- `systemctl stop future-trader.service` stops cleanly
+- `systemctl restart future-trader.service` recovers without manual cleanup
+- service auto-restarts after failure (`Restart=always`)
+- logs append to `logs/trading.log` and `logs/error.log`
+- structured events append to `logs/structured.jsonl`
+- `runtime/health.json` updates while bot is running
+- no orphan `python main.py` processes after stop
+- no duplicate active service instances
+- risk controls and reconciliation behavior remain intact

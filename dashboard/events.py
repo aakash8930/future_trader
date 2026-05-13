@@ -7,11 +7,11 @@ from typing import AsyncGenerator
 
 from sse_starlette import EventSourceResponse
 
-EVENTS_PATH = Path("logs/events.jsonl")
+EVENTS_PATH = Path(os.getenv("EVENT_LOG_PATH", "logs/structured.jsonl"))
 
 
 async def event_generator() -> AsyncGenerator:
-    """Yield new lines from events.jsonl as SSE events using seek(0,2) tail approach."""
+    """Yield new lines from the structured JSONL log using seek(0,2) tail approach."""
     while True:
         try:
             if not EVENTS_PATH.exists():
@@ -37,7 +37,7 @@ async def event_generator() -> AsyncGenerator:
 
 
 async def stream_events(request):
-    """SSE endpoint that streams events.jsonl to the client."""
+    """SSE endpoint that streams structured JSONL events to the client."""
     async def _inner():
         async for event in event_generator():
             yield event

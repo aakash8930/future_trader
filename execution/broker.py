@@ -6,7 +6,7 @@ from typing import Optional
 
 import ccxt
 
-from execution.position import Position
+from execution.position import Position, Side
 from execution.database import get_db
 from config.live import BINANCE_LIVE_API
 
@@ -21,7 +21,7 @@ class PaperBroker:
         self.db = get_db()
         # Ensure the positions table exists (migrations are run in Database.__init__)
 
-    def open_position(self, side: str, price: float, qty: float, symbol: str | None = None, leverage: float = 1.0) -> Position:
+    def open_position(self, side: Side | str, price: float, qty: float, symbol: str | None = None, leverage: float = 1.0) -> Position:
         self.position = Position(
             side=side,
             entry_price=price,
@@ -195,8 +195,9 @@ class ShadowBroker(PaperBroker):
         # If we get here, no position found
         self.position = None
 
-    def open_position(self, side: str, price: float, qty: float, symbol: str | None = None, leverage: float = 1.0) -> Position:
-        print(f"[SHADOW] OPEN {side} {symbol} qty={qty:.6f} @ {price:.2f} leverage={leverage:.1f}x")
+    def open_position(self, side: Side | str, price: float, qty: float, symbol: str | None = None, leverage: float = 1.0) -> Position:
+        side_label = getattr(side, "value", side)
+        print(f"[SHADOW] OPEN {side_label} {symbol} qty={qty:.6f} @ {price:.2f} leverage={leverage:.1f}x")
         pos = super().open_position(side, price, qty, symbol, leverage=leverage)
         self.symbol = symbol
         self._persist_position()

@@ -12,6 +12,8 @@ from typing import Optional, Dict, Any
 import pandas as pd
 import logging
 
+from execution.position import Side
+
 logger = logging.getLogger(__name__)
 
 
@@ -72,7 +74,7 @@ class SimplifiedSignal:
 
     symbol: str
     timestamp: pd.Timestamp
-    side: Optional[str]  # 'LONG', 'SHORT', None
+    side: Side  # LONG, SHORT, NONE
     confidence: float  # Model probability
     volatility: float  # Current ATR % of price
     trend_bias: str  # 'UP', 'DOWN', 'NEUTRAL'
@@ -146,48 +148,40 @@ class SimplifiedStrategyEngine:
                 symbol, df, f"Volatility {volatility_pct:.3%} outside range"
             )
 
-        # === FILTER 2: Trend Bias ===
-        # Simple EMA, prevents counter-trend trades
-        trend_bias = "NEUTRAL"
-        if self.config.use_trend_filter:
-            ema = bar.get("ema_50", bar["close"])
-            if bar["close"] > ema * 1.01:
-                trend_bias = "UP"
-            elif bar["close"] < ema * 0.99:
-                trend_bias = "DOWN"
+        ema = bar.get("ema_50", bar["close"])
+        trend_bias = "UP" if bar["close"] > ema else "DOWN" if bar["close"] < ema else "NEUTRAL"
 
-        filters["trend_ok"] = trend_bias in ["UP", "DOWN"]
-
-        if not filters["trend_ok"]:
-            return self._null_signal(symbol, df, f"No trend bias: {trend_bias}")
-
-        # === FILTER 3: ML Model Confidence ===
+        # === FILTER 2: ML Model Confidence ===
         # Primary signal source
         if self.model is None:
-            confidence = 0.5
-            pred_side = None
+            ml_prob = 0.5
         else:
             try:
                 proba = self.model.predict_proba(df.iloc[[-1]])
                 if isinstance(proba, (tuple, list)):
                     proba_short, proba_long = proba
-                    confidence = max(proba_short, proba_long)
-                    pred_side = "LONG" if proba_long > proba_short else "SHORT"
+                    ml_prob = float(proba_long)
                 else:
-                    confidence = float(proba[0, 1]) if len(proba.shape) > 1 else float(proba)
-                    pred_side = "LONG" if confidence > 0.5 else "SHORT"
+                    ml_prob = float(proba[0, 1]) if len(proba.shape) > 1 else float(proba)
             except Exception as e:
                 logger.warning(f"Model prediction error: {e}")
                 return self._null_signal(symbol, df, f"Model error: {e}")
 
-        filters["confidence_ok"] = confidence >= self.config.min_confidence
+        side = Side.NONE
+        confidence = 0.0
+        if bar["close"] > ema and ml_prob >= 0.60:
+            side = Side.LONG
+            confidence = ml_prob
+        elif bar["close"] < ema and ml_prob <= 0.40:
+            side = Side.SHORT
+            confidence = 1.0 - ml_prob
 
-        if not filters["confidence_ok"]:
-            return self._null_signal(
-                symbol, df, f"Confidence {confidence:.3f} < {self.config.min_confidence}"
-            )
+        filters["signal_selected"] = side != Side.NONE
 
-        # === FILTER 4: Cooldown ===
+        if side == Side.NONE:
+            return self._null_signal(symbol, df, f"No trade: price={bar['close']:.4f}, ema={ema:.4f}, ml_prob={ml_prob:.3f}")
+
+        # === FILTER 3: Cooldown ===
         # Prevent oversignaling
         if current_bar_idx is not None:
             bars_since_last = current_bar_idx - self.last_signal_bar
@@ -204,15 +198,15 @@ class SimplifiedStrategyEngine:
         stop_dist = atr * self.config.stop_loss_atr_mult
         tp_dist = atr * self.config.take_profit_atr_mult
 
-        if pred_side == "LONG":
+        if side == Side.LONG:
             stop_loss = entry - stop_dist
             take_profit = entry + tp_dist
-        else:  # SHORT
+        else:
             stop_loss = entry + stop_dist
             take_profit = entry - tp_dist
 
         # Expected PnL (assuming model accuracy)
-        if pred_side == "LONG":
+        if side == Side.LONG:
             expected_pnl_pct = (take_profit - entry) / entry - (
                 self.config.fee_pct_per_side * 2 + self.config.slippage_pct_per_side * 2
             )
@@ -225,15 +219,10 @@ class SimplifiedStrategyEngine:
         if current_bar_idx is not None:
             self.last_signal_bar = current_bar_idx
 
-        # All filters passed
-        for key, val in filters.items():
-            if not val:
-                return self._null_signal(symbol, df, f"Filter failed: {key}")
-
         return SimplifiedSignal(
             symbol=symbol,
             timestamp=timestamp,
-            side=pred_side,
+            side=side,
             confidence=confidence,
             volatility=volatility_pct,
             trend_bias=trend_bias,
@@ -241,7 +230,7 @@ class SimplifiedStrategyEngine:
             stop_loss=stop_loss,
             take_profit=take_profit,
             expected_pnl_pct=expected_pnl_pct,
-            reason=f"{pred_side} with {confidence:.1%} confidence, {volatility_pct:.1%} vol, {trend_bias} trend",
+            reason=f"{side.value} with {confidence:.1%} confidence, {volatility_pct:.1%} vol, {trend_bias} trend",
             filters_passed=filters,
         )
 
@@ -253,7 +242,7 @@ class SimplifiedStrategyEngine:
         return SimplifiedSignal(
             symbol=symbol,
             timestamp=bar.name if hasattr(bar.name, "to_pydatetime") else pd.Timestamp.now(),
-            side=None,
+            side=Side.NONE,
             confidence=0.0,
             volatility=0.0,
             trend_bias="NEUTRAL",
@@ -267,11 +256,11 @@ class SimplifiedStrategyEngine:
 
     def validate_signal(self, signal: SimplifiedSignal) -> bool:
         """Validate signal quality before execution"""
-        if signal.side is None:
+        if signal.side == Side.NONE:
             return False
 
         # Check RR ratio (at least 2:1)
-        if signal.side == "LONG":
+        if signal.side == Side.LONG:
             rr_ratio = (signal.take_profit - signal.entry_price) / max(
                 signal.entry_price - signal.stop_loss, 0.0001
             )

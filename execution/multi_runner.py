@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from execution.runner import TradingRunner
+from execution.health_reporter import ServiceHealthReporter
 from execution.universe_manager import UniverseManager
 from config.live import LiveSettings
 from logs.logger import TradeLogger
@@ -28,6 +29,7 @@ class MultiSymbolTradingSystem:
         self.logger = logger if logger is not None else TradeLogger()
         self.strategy_config = strategy_config
         self.runners: dict[str, TradingRunner] = {}
+        self.health = ServiceHealthReporter()
 
         self.universe = UniverseManager(
             all_symbols=settings.symbols,
@@ -109,6 +111,31 @@ class MultiSymbolTradingSystem:
             except Exception as exc:
                 print(f"[{symbol}] Failed to persist state: {exc}")
 
+    def _update_health(self, status: str, exchange_connected: bool):
+        balances = [r.risk_state.current_balance for r in self.runners.values()]
+        total_balance = float(sum(balances)) if balances else float(self.settings.starting_balance_usdt)
+
+        open_positions = sum(1 for r in self.runners.values() if r.broker.position is not None)
+
+        candle_times = [
+            r.last_processed_candle_time.isoformat()
+            for r in self.runners.values()
+            if r.last_processed_candle_time is not None
+        ]
+        last_candle_time = max(candle_times) if candle_times else None
+
+        self.health.write(
+            status=status,
+            balance=total_balance,
+            exchange_connected=exchange_connected,
+            open_positions=open_positions,
+            last_candle_time=last_candle_time,
+            extra={
+                "active_runners": len(self.runners),
+                "mode": self.settings.mode,
+            },
+        )
+
     def run_loop(self):
         print(f"[>>] Autonomous trading system started [MODE={self.settings.mode}]")
 
@@ -130,6 +157,7 @@ class MultiSymbolTradingSystem:
                     if not active_symbols:
                         self._remove_inactive_runners([])
                         print("[SYSTEM] no active tradable symbols -> flat mode")
+                        self._update_health(status="healthy", exchange_connected=True)
                         time.sleep(max(self.settings.sleep_seconds, 120))
                         continue
 
@@ -143,10 +171,13 @@ class MultiSymbolTradingSystem:
                             continue
                         runner.run_once()
 
+                    self._update_health(status="healthy", exchange_connected=True)
+
                     time.sleep(self.settings.sleep_seconds)
 
                 except KeyboardInterrupt:
                     print("Stopped by user")
+                    self._update_health(status="stopped", exchange_connected=True)
                     break
 
                 except RuntimeError as e:
@@ -154,6 +185,7 @@ class MultiSymbolTradingSystem:
                     if "FETCHER" in error_msg or "exchange" in error_msg.lower():
                         print(f"\n[X] FATAL: {error_msg}")
                         print("\nSystem cannot start due to exchange connectivity issues.")
+                        self._update_health(status="degraded", exchange_connected=False)
                         break
                     raise
 
@@ -161,6 +193,7 @@ class MultiSymbolTradingSystem:
                     import traceback
                     print(f"System error: {e}")
                     print(f"System traceback: {traceback.format_exc()[-500:]}")
+                    self._update_health(status="degraded", exchange_connected=False)
                     time.sleep(30)
         finally:
             signal.signal(signal.SIGINT, old_sigint)

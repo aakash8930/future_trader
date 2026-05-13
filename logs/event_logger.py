@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from threading import Lock
 
-EVENT_LOG_PATH = Path("logs/events.jsonl")
+EVENT_LOG_PATH = Path(os.getenv("EVENT_LOG_PATH", "logs/structured.jsonl"))
 
 
 class EventLogger:
@@ -25,7 +25,7 @@ class EventLogger:
         symbol: str = None,
         **kwargs,
     ):
-        """Append a structured event to logs/events.jsonl."""
+        """Append a structured event to the configured structured JSONL log."""
         event = {
             "version": self.VERSION,
             "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -66,5 +66,3 @@ def get_event_logger() -> EventLogger:
         _event_logger = EventLogger()
     return _event_logger
 
-
-print("EVENT WRITTEN:", get_event_logger())
