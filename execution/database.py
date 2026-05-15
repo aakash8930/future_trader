@@ -15,7 +15,7 @@ from datetime import datetime
 DB_PATH = Path("logs/trading.db")
 
 # Schema version for migrations
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Migration scripts: each version corresponds to the version number
 MIGRATIONS = {
@@ -48,6 +48,41 @@ MIGRATIONS = {
     3: """
         -- Add unique constraint on symbol to prevent duplicate positions for the same symbol
         CREATE UNIQUE INDEX IF NOT EXISTS idx_positions_symbol_unique ON positions(symbol);
+    """,
+    4: """
+        -- Create trades table for complete trade history
+        CREATE TABLE IF NOT EXISTS trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            entry_price REAL NOT NULL,
+            avg_entry REAL NOT NULL,
+            exit_price REAL,
+            qty REAL NOT NULL,
+            pnl REAL,
+            pnl_pct REAL,
+            leverage REAL DEFAULT 1.0,
+            balance REAL NOT NULL,
+            prob REAL NOT NULL,
+            threshold REAL NOT NULL,
+            atr REAL NOT NULL,
+            atr_pct REAL NOT NULL,
+            adx REAL NOT NULL,
+            regime TEXT NOT NULL,
+            stop_loss REAL,
+            take_profit REAL,
+            exit_reason TEXT,
+            close_reason TEXT,
+            holding_time_sec INTEGER,
+            add_count INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades(timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
+        CREATE INDEX IF NOT EXISTS idx_trades_symbol_ts ON trades(symbol, timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_trades_side ON trades(side);
+        CREATE INDEX IF NOT EXISTS idx_trades_exit_reason ON trades(exit_reason);
     """
 }
 

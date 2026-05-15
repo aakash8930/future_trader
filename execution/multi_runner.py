@@ -87,6 +87,7 @@ class MultiSymbolTradingSystem:
             cooldown_minutes=self.settings.cooldown_minutes,
             risk_per_trade=self.settings.risk_per_trade,
             config=self.strategy_config,
+            max_short_leverage=self.settings.max_short_leverage,
             exchange_name=self.settings.exchange_name,
             exchange_fallbacks=self.settings.exchange_fallbacks,
             exchange_timeout_ms=self.settings.exchange_timeout_ms,

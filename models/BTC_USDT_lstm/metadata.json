@@ -1,0 +1,50 @@
+{
+  "model_name": "ALPHASEEKER",
+  "model_version": "v1.1",
+  "model_type": "LSTM",
+  "symbol": "BTC/USDT",
+  "feature_columns": [
+    "ema_fast",
+    "ema_slow",
+    "ema_spread",
+    "dist_ema200",
+    "ema_fast_slope",
+    "rsi",
+    "rsi_delta",
+    "ret",
+    "vol",
+    "volume_zscore",
+    "atr_pct",
+    "adx",
+    "breakout_strength",
+    "obv",
+    "macd_line",
+    "macd_signal",
+    "macd_hist",
+    "bb_width",
+    "bb_position",
+    "vwap",
+    "volume_momentum",
+    "momentum_5",
+    "atr_regime"
+  ],
+  "window_size": 16,
+  "horizon": 12,
+  "stop_atr_mult": 2.0,
+  "take_atr_mult": 3.0,
+  "timeframe": "15m",
+  "optimized_long_threshold": 0.45,
+  "threshold_optimization": {
+    "precision": 0.1728395061728395,
+    "trade_rate": 0.313953488372093,
+    "sharpe": -9.537107418418218,
+    "n_trades": 81,
+    "score": -9.50253951718365
+  },
+  "train_rows": 1006,
+  "val_rows": 258,
+  "trained_at_utc": "2026-05-13T14:32:10.867627+00:00",
+  "metrics": {
+    "val_sharpe": -9.537107418418218
+  }
+}

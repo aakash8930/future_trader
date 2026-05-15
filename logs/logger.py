@@ -18,8 +18,8 @@ TRADE_LOG_PATH = Path("logs/trades_history.jsonl")
 EQUITY_LOG_PATH = Path("logs/equity_curve.jsonl")
 SYMBOLS_PATH   = Path("logs/symbols.json")
 
-# Flag to enable JSONL fallback (set to True if you want both)
-ENABLE_JSONL_FALLBACK = False
+# Flag to enable JSONL fallback (enabled to ensure guaranteed persistence)
+ENABLE_JSONL_FALLBACK = True
 
 
 class TradeLogger:
@@ -43,37 +43,9 @@ class TradeLogger:
         """Initialize the database connection."""
         try:
             self.db = get_db()
-            # Ensure the trades table exists (migrations should have created it)
-            # We'll add a simple check and create if not exists (though migrations should handle it)
-            self.db.execute("""
-                CREATE TABLE IF NOT EXISTS trades (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp   TEXT      NOT NULL,
-                    symbol      TEXT      NOT NULL,
-                    side        TEXT      NOT NULL,
-                    entry_price REAL      NOT NULL,
-                    avg_entry   REAL      NOT NULL,
-                    exit_price  REAL,
-                    qty         REAL      NOT NULL,
-                    pnl         REAL,
-                    balance     REAL      NOT NULL,
-                    prob        REAL      NOT NULL,
-                    threshold   REAL      NOT NULL,
-                    atr         REAL      NOT NULL,
-                    atr_pct     REAL      NOT NULL,
-                    adx         REAL      NOT NULL,
-                    regime      TEXT      NOT NULL,
-                    stop_loss   REAL,
-                    take_profit REAL,
-                    exit_reason TEXT,
-                    add_count   INTEGER DEFAULT 0
-                );
-            """)
-            # Create indexes for common queries
-            self.db.execute("CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades(timestamp DESC);")
-            self.db.execute("CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);")
-            self.db.execute("CREATE INDEX IF NOT EXISTS idx_trades_symbol_ts ON trades(symbol, timestamp DESC);")
-            print("[LOGGER] Trades table ensured.")
+            # Database migration is handled by execution/database.py
+            # The trades table will be created by migration v4
+            print("[LOGGER] Connected to centralized database.")
         except Exception as e:
             print(f"[LOGGER ERROR] Failed to initialize database: {e}")
             self.db = None
@@ -107,6 +79,8 @@ class TradeLogger:
                 "exit_price": trade.get("exit_price"),
                 "qty": trade.get("qty"),
                 "pnl": trade.get("pnl"),
+                "pnl_pct": trade.get("pnl_pct"),
+                "leverage": trade.get("leverage"),
                 "balance": trade.get("balance"),
                 "prob": trade.get("prob"),
                 "threshold": trade.get("threshold"),
@@ -117,6 +91,8 @@ class TradeLogger:
                 "stop_loss": trade.get("stop_loss"),
                 "take_profit": trade.get("take_profit"),
                 "exit_reason": trade.get("exit_reason"),
+                "close_reason": trade.get("close_reason"),
+                "holding_time_sec": trade.get("holding_time_sec"),
                 "add_count": trade.get("add_count", 0),
             }
             with open(TRADE_LOG_PATH, "a", encoding="utf-8") as f:
@@ -126,57 +102,77 @@ class TradeLogger:
 
     def log(
         self,
-        symbol:      str,
-        side:        str,
-        entry_price: float,
-        exit_price:  float,
-        qty:         float,
-        pnl:         float,
-        balance:     float,
-        prob_up:     float,
-        avg_entry:   float | None = None,
-        threshold:   float        = 0.0,
-        atr:         float        = 0.0,
-        atr_pct:     float        = 0.0,
-        adx:         float        = 0.0,
-        regime:      str          = "",
-        stop_loss:   float | None = None,
-        take_profit: float | None = None,
-        exit_reason: str          = "",
-        add_count:   int          = 0,
+        symbol:         str,
+        side:           str,
+        entry_price:    float,
+        exit_price:     float,
+        qty:            float,
+        pnl:            float,
+        balance:        float,
+        prob_up:        float,
+        avg_entry:      float | None = None,
+        threshold:      float        = 0.0,
+        atr:            float        = 0.0,
+        atr_pct:        float        = 0.0,
+        adx:            float        = 0.0,
+        regime:         str          = "",
+        stop_loss:      float | None = None,
+        take_profit:    float | None = None,
+        exit_reason:    str          = "",
+        add_count:      int          = 0,
+        leverage:       float        = 1.0,
+        pnl_pct:        float | None = None,
+        close_reason:   str | None   = None,
+        holding_time_sec: int | None = None,
     ):
         """Log a trade to the database (or JSONL fallback)."""
         # Use entry_price if avg_entry is not provided
         if avg_entry is None:
             avg_entry = entry_price
+        
+        # Calculate pnl_pct if not provided
+        if pnl_pct is None:
+            pnl_pct = (pnl / balance) if balance > 0 else 0.0
 
+        timestamp = datetime.now(timezone.utc).isoformat()
         payload = (
-            datetime.now(timezone.utc).isoformat(),
+            timestamp,
             symbol, side,
             entry_price, avg_entry,
             exit_price, qty,
-            pnl, balance, prob_up, threshold,
+            pnl, pnl_pct, leverage, balance, prob_up, threshold,
             atr, atr_pct, adx, regime,
-            stop_loss, take_profit, exit_reason, add_count,
+            stop_loss, take_profit, exit_reason, close_reason, holding_time_sec, add_count,
         )
+
+        # Lightweight validation: ensure payload length matches expected columns
+        expected_cols = 23
+        if len(payload) != expected_cols:
+            raise ValueError(f"Payload length {len(payload)} does not match expected columns {expected_cols}")
 
         # Try to write to database
         if self.db is not None and self._ensure_connection():
             try:
                 with self._lock:  # Ensure thread-safe execution
-                    self.db.execute("""
+                    # Build placeholders dynamically to avoid mismatch bugs
+                    placeholders = ",".join(["?"] * len(payload))
+                    self.db.execute(
+                        f"""
                         INSERT INTO trades
                             (timestamp, symbol, side,
                              entry_price, avg_entry, exit_price, qty,
-                             pnl, balance, prob, threshold,
+                             pnl, pnl_pct, leverage, balance, prob, threshold,
                              atr, atr_pct, adx, regime,
-                             stop_loss, take_profit, exit_reason, add_count)
+                             stop_loss, take_profit, exit_reason, close_reason, holding_time_sec, add_count)
                         VALUES
-                            (?,?,?, ?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?,?,?)
-                    """, payload)
+                            ({placeholders})
+                    """,
+                        payload,
+                    )
                 return
             except Exception as e:
                 print(f"[LOGGER ERROR] Database write failed: {e}")
+                print(f"[LOGGER ERROR] Attempting JSONL fallback...")
                 # Fall through to JSONL fallback if enabled
 
         # Fallback to JSONL if enabled
@@ -190,17 +186,21 @@ class TradeLogger:
                 "exit_price": payload[5],
                 "qty": payload[6],
                 "pnl": payload[7],
-                "balance": payload[8],
-                "prob": payload[9],
-                "threshold": payload[10],
-                "atr": payload[11],
-                "atr_pct": payload[12],
-                "adx": payload[13],
-                "regime": payload[14],
-                "stop_loss": payload[15],
-                "take_profit": payload[16],
-                "exit_reason": payload[17],
-                "add_count": payload[18],
+                "pnl_pct": payload[8],
+                "leverage": payload[9],
+                "balance": payload[10],
+                "prob": payload[11],
+                "threshold": payload[12],
+                "atr": payload[13],
+                "atr_pct": payload[14],
+                "adx": payload[15],
+                "regime": payload[16],
+                "stop_loss": payload[17],
+                "take_profit": payload[18],
+                "exit_reason": payload[19],
+                "close_reason": payload[20],
+                "holding_time_sec": payload[21],
+                "add_count": payload[22],
             }
             self._write_jsonl_fallback(trade_dict)
         else:

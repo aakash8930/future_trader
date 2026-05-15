@@ -31,11 +31,11 @@ class RegimeController:
         if adx >= 28 and atr_pct >= 0.003:
             return MarketRegime.TREND_STRONG
 
-        if adx >= 16:
+        if adx >= 14:
             return MarketRegime.TREND_WEAK
 
         # Recovery-friendly weak trend classification
-        if adx >= 11 and atr_pct >= 0.004 and bullish_cross and near_ema200:
+        if adx >= 10 and atr_pct >= 0.004 and bullish_cross and near_ema200:
             return MarketRegime.TREND_WEAK
 
         return MarketRegime.SIDEWAYS

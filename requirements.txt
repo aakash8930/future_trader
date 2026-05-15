@@ -4,6 +4,7 @@
 
 python-dateutil
 requests
+aiohttp
 ta
 joblib
 pandas

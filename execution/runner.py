@@ -25,6 +25,7 @@ from models.ensemble import EnsembleDirectionModel
 from execution.position import Side
 from risk.limits import RiskLimits, RiskState
 from config.shared_state import get_shared_state, update_shared_state
+from services import telegram_notifier
 
 
 def _fmt_price(price: float, symbol: str) -> str:
@@ -46,6 +47,7 @@ class TradingRunner:
         cooldown_minutes: int = 30,
         risk_per_trade: float = 0.01,
         leverage: float = 1.0,
+        max_short_leverage: float | None = None,
         config: StrategyConfig | None = None,
         exchange_name: str = "binance",
         exchange_fallbacks: list[str] | None = None,
@@ -55,7 +57,11 @@ class TradingRunner:
         event_logger=None,
     ):
         self.symbol = symbol
-        self.leverage = leverage  # Position leverage (1.0-125.0)
+        self.leverage = leverage  # Default position leverage (LONG)
+        # Per-side short leverage cap; if not provided fall back to default
+        self.max_short_leverage = max_short_leverage if max_short_leverage is not None else leverage
+        # Current trade leverage (set at open time)
+        self.current_trade_leverage = self.leverage
         self.timeframe = timeframe  # original timeframe (used for CLI)
         self.lookback = lookback
         self._cached_timeframe = timeframe
@@ -164,6 +170,17 @@ class TradingRunner:
             print(f"[RESTORED] {symbol} position: entry={self.last_entry_price:.4f}, SL={self.stop_loss:.4f}, TP={self.take_profit:.4f}, TP1={self.take_profit_1:.4f}")
 
         print(f"[AUTONOMOUS AI] {symbol} ready (mode={self._cached_mode}, timeframe={self._cached_timeframe})")
+        print(f"[CONFIG] Risk per trade: {self.strategy.risk_per_trade * 100:.2f}%")
+
+        # Send Telegram startup notification
+        try:
+            telegram_notifier.notify_startup(
+                symbol=symbol,
+                mode=self._cached_mode,
+                timeframe=self._cached_timeframe
+            )
+        except Exception as e:
+            print(f"[TELEGRAM ERROR] Failed to send startup notification: {e}")
 
     def _last_candle_iso(self) -> str | None:
         if self.last_processed_candle_time is None:
@@ -441,10 +458,15 @@ class TradingRunner:
 
         risk_mult = supervisor_dec.risk_multiplier * self.regime_ctrl.risk_multiplier(regime)
 
+        # Choose leverage based on side: use `max_short_leverage` for SHORT, default otherwise
+        side_label = getattr(dec.side, "value", dec.side)
+        trade_leverage = self.max_short_leverage if side_label == Side.SHORT.value else self.leverage
+
         qty = self.strategy.position_size(
             balance=self.risk_state.current_balance * risk_mult,
             entry_price=dec.price,
             stop_price=dec.stop_loss,
+            leverage=trade_leverage,
         )
 
         if qty <= 0:
@@ -453,14 +475,35 @@ class TradingRunner:
             self.event_logger.skip(symbol=self.symbol, message=f"SKIP {self.symbol}: qty_zero", reason="qty_zero")
             return
 
-        # Validate leverage
-        if self.leverage < 1.0 or self.leverage > 125.0:
-            reason = f"invalid_leverage_{self.leverage}x"
+        # Validate leverage for this trade
+        if trade_leverage < 1.0 or trade_leverage > 125.0:
+            reason = f"invalid_leverage_{trade_leverage}x"
             print(f"[{self.symbol}] SKIP | {reason}")
             self.event_logger.skip(symbol=self.symbol, message=f"SKIP {self.symbol}: {reason}", reason=reason)
             return
 
-        self.broker.open_position(getattr(dec.side, "value", dec.side), dec.price, qty, self.symbol, leverage=self.leverage)
+        # Position Reversal Safety Guard
+        if self.broker.position:
+            current_side = getattr(self.broker.position.side, "value", self.broker.position.side)
+            new_side = getattr(dec.side, "value", dec.side)
+            
+            if current_side != new_side:
+                # Position reversal attempted - must close first
+                reason = f"position_reversal_blocked({current_side}→{new_side})"
+                print(f"[{self.symbol}] SKIP | {reason}")
+                self.event_logger.skip(symbol=self.symbol, message=f"SKIP {self.symbol}: {reason}", reason=reason)
+                telegram_notifier.notify_error("POSITION_REVERSAL_BLOCKED", f"{self.symbol}: Cannot reverse from {current_side} to {new_side} without closing first")
+                return
+            
+            # Same side signal while already in position - skip for now (pyramid disabled)
+            reason = f"already_open({current_side})"
+            print(f"[{self.symbol}] SKIP | {reason}")
+            self.event_logger.skip(symbol=self.symbol, message=f"SKIP {self.symbol}: {reason}", reason=reason)
+            return
+
+        # Persist the leverage used for the open so close logging can report it
+        self.current_trade_leverage = trade_leverage
+        self.broker.open_position(getattr(dec.side, "value", dec.side), dec.price, qty, self.symbol, leverage=trade_leverage)
 
         self.last_trade_time = datetime.utcnow()
         self.last_entry_price = dec.price
@@ -469,7 +512,18 @@ class TradingRunner:
         self.last_decision = dec
         self.stop_loss = dec.stop_loss
         self.take_profit = dec.take_profit
-        self.take_profit_1 = dec.price + dec.atr * (self.cfg.take_atr_mult / 2.0)
+        
+        # Calculate TP_1 (50% of TP distance) - must account for LONG vs SHORT
+        side_label = getattr(dec.side, "value", dec.side)
+        if side_label == Side.SHORT.value:
+            # SHORT: TP is below entry, so TP_1 is halfway down
+            tp_distance = dec.price - dec.take_profit
+            self.take_profit_1 = dec.price - (tp_distance / 2.0)
+        else:
+            # LONG: TP is above entry, so TP_1 is halfway up
+            tp_distance = dec.take_profit - dec.price
+            self.take_profit_1 = dec.price + (tp_distance / 2.0)
+        
         self._profit_lock_activated = False
 
         # Persist SL/TP to broker state immediately
@@ -517,9 +571,32 @@ class TradingRunner:
             regime=dec.regime,
         )
 
+        # Update health metrics
+        try:
+            self.health.increment_trades(side=getattr(dec.side, "value", dec.side))
+        except Exception as e:
+            print(f"[HEALTH ERROR] Failed to update trade metrics: {e}")
+
+        # Send Telegram notification
+        try:
+            telegram_notifier.notify_trade_open(
+                symbol=self.symbol,
+                side=getattr(dec.side, "value", dec.side),
+                entry_price=dec.price,
+                stop_loss=dec.stop_loss,
+                take_profit=dec.take_profit,
+                qty=qty,
+                probability=dec.prob,
+                adx=dec.adx,
+                mode=self._cached_mode
+            )
+        except Exception as e:
+            print(f"[TELEGRAM ERROR] Failed to send trade open notification: {e}")
+
         print(
             f"[^^] OPEN {getattr(dec.side, 'value', dec.side)} {self.symbol} | "
             f"price={_fmt_price(dec.price, self.symbol)} | qty={qty:.6f} | "
+            f"leverage={trade_leverage}x | "
             f"SL={_fmt_price(dec.stop_loss, self.symbol)} | "
             f"TP={_fmt_price(dec.take_profit, self.symbol)} | "
             f"prob={dec.prob:.3f} | adx={dec.adx:.1f} | regime={dec.regime}"
@@ -557,6 +634,34 @@ class TradingRunner:
         self.supervisor.register_trade(pnl)
 
         try:
+            # Calculate holding duration
+            holding_duration = (datetime.utcnow() - self.last_trade_time).total_seconds() if self.last_trade_time else 0
+            holding_time_sec = int(holding_duration)
+            
+            # Calculate PnL percentage
+            pnl_pct = (pnl / avg_entry) if avg_entry > 0 else 0.0
+
+            # Classify close reason more precisely
+            er = exit_reason.lower() if exit_reason else ""
+            if er == "take_profit":
+                close_label = "TAKE_PROFIT"
+            elif er == "stop_loss":
+                # If stop was hit but pnl is positive and we had profit lock => trailing profit
+                if pnl > 0 and getattr(self, "_profit_lock_activated", False):
+                    close_label = "TRAILING_PROFIT"
+                elif pnl > 0:
+                    close_label = "TAKE_PROFIT"
+                else:
+                    # Negative or zero pnl
+                    close_label = "TRAILING_STOP" if getattr(self, "_profit_lock_activated", False) else "STOP_LOSS"
+            elif er in {"manual", "manual_exit"}:
+                close_label = "MANUAL_EXIT"
+            elif er in {"market_guard", "market_guard_exit"}:
+                close_label = "MARKET_GUARD_EXIT"
+            else:
+                # Fallback to normalized upper-case of provided reason
+                close_label = exit_reason.upper() if exit_reason else "UNKNOWN"
+
             self.logger.log(
                 symbol=self.symbol,
                 side=self.last_entry_side,
@@ -576,6 +681,10 @@ class TradingRunner:
                 take_profit=self.take_profit,
                 exit_reason=exit_reason,
                 add_count=add_count,
+                leverage=self.current_trade_leverage,
+                pnl_pct=pnl_pct,
+                close_reason=close_label,
+                holding_time_sec=holding_time_sec,
             )
         except Exception as exc:
             print(f"[LOGGER ERROR] {exc}")
@@ -593,6 +702,8 @@ class TradingRunner:
                 "exit_price": price,
                 "qty": total_qty,
                 "pnl": pnl,
+                "pnl_pct": pnl_pct,
+                "leverage": self.leverage,
                 "balance": self.risk_state.current_balance,
                 "prob": self.last_entry_prob,
                 "threshold": dec.threshold if dec else 0.0,
@@ -603,6 +714,8 @@ class TradingRunner:
                 "stop_loss": self.stop_loss,
                 "take_profit": self.take_profit,
                 "exit_reason": exit_reason,
+                "close_reason": exit_reason.upper(),
+                "holding_time_sec": holding_time_sec,
                 "add_count": add_count,
                 "status": "CLOSED",
             }
@@ -621,6 +734,35 @@ class TradingRunner:
             exit_reason=exit_reason,
             balance=self.risk_state.current_balance,
         )
+
+        # Update health metrics
+        try:
+            self.health.register_trade_pnl(pnl)
+        except Exception as e:
+            print(f"[HEALTH ERROR] Failed to register trade PnL: {e}")
+
+        # Send Telegram notification
+        try:
+            # Calculate duration in minutes
+            if self.last_trade_time:
+                duration = (datetime.utcnow() - self.last_trade_time).total_seconds() / 60
+                duration_minutes = int(duration)
+            else:
+                duration_minutes = 0
+            
+            pnl_pct = (pnl / avg_entry) if avg_entry > 0 else 0.0
+            telegram_notifier.notify_trade_close(
+                symbol=self.symbol,
+                side=self.last_entry_side,
+                pnl=pnl,
+                pnl_pct=pnl_pct,
+                balance=self.risk_state.current_balance,
+                duration_minutes=duration_minutes,
+                close_reason=exit_reason,
+                mode=self._cached_mode
+            )
+        except Exception as e:
+            print(f"[TELEGRAM ERROR] Failed to send trade close notification: {e}")
 
         icon = "[##]" if exit_reason == "stop_loss" else "[*]"
         print(

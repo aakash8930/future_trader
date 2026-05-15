@@ -38,7 +38,7 @@ class LiveSettings:
 
     starting_balance_usdt: float = 500.0
     cooldown_minutes: int = 30
-    risk_per_trade: float = 0.01
+    risk_per_trade: float = 0.005  # Default to 0.5% risk per trade (conservative)
     default_leverage: float = 1.0  # Default leverage for positions (1.0-125.0)
     max_long_leverage: float = 3.0
     max_short_leverage: float = 2.0
@@ -58,11 +58,11 @@ class LiveSettings:
     strategy_min_prob: float = 0.50
     strategy_min_adx: float = 12.0
     strategy_min_atr_pct: float = 0.0003
-    strategy_rsi_long_min: float = 42.0
-    strategy_rsi_long_max: float = 66.0
+    strategy_rsi_long_min: float = 34.0
+    strategy_rsi_long_max: float = 78.0
     strategy_fee_pct_per_side: float = 0.0010
     strategy_slippage_pct_per_side: float = 0.0008
-    strategy_min_expected_edge: float = 0.00020
+    strategy_min_expected_edge: float = -0.00250
     strategy_stop_atr_mult: float = 1.40
     strategy_take_atr_mult: float = 3.40
     strategy_trail_atr_mult: float = 0.95
@@ -99,7 +99,7 @@ class LiveSettings:
             timeframe=os.getenv("TRADING_TIMEFRAME", "15m"),
             starting_balance_usdt=_env_float("PAPER_STARTING_BALANCE_USDT", 500.0),
             cooldown_minutes=_env_int("ENTRY_COOLDOWN_MINUTES", 30),
-            risk_per_trade=_env_float("RISK_PER_TRADE", 0.05),
+            risk_per_trade=_env_float("RISK_PER_TRADE", 0.005),  # 0.5% default
             default_leverage=_env_float("DEFAULT_LEVERAGE", 1.0),
             max_long_leverage=_env_float("MAX_LONG_LEVERAGE", 3.0),
             max_short_leverage=_env_float("MAX_SHORT_LEVERAGE", 2.0),
@@ -114,11 +114,11 @@ class LiveSettings:
             strategy_min_prob=_env_float("STRATEGY_MIN_PROB", 0.50),
             strategy_min_adx=_env_float("STRATEGY_MIN_ADX", 12.0),
             strategy_min_atr_pct=_env_float("STRATEGY_MIN_ATR_PCT", 0.0003),
-            strategy_rsi_long_min=_env_float("STRATEGY_RSI_LONG_MIN", 42.0),
-            strategy_rsi_long_max=_env_float("STRATEGY_RSI_LONG_MAX", 66.0),
+            strategy_rsi_long_min=_env_float("STRATEGY_RSI_LONG_MIN", 34.0),
+            strategy_rsi_long_max=_env_float("STRATEGY_RSI_LONG_MAX", 78.0),
             strategy_fee_pct_per_side=_env_float("STRATEGY_FEE_PCT_PER_SIDE", 0.0010),
             strategy_slippage_pct_per_side=_env_float("STRATEGY_SLIPPAGE_PCT_PER_SIDE", 0.0008),
-            strategy_min_expected_edge=_env_float("STRATEGY_MIN_EXPECTED_EDGE", 0.00020),
+            strategy_min_expected_edge=_env_float("STRATEGY_MIN_EXPECTED_EDGE", -0.00250),
             strategy_stop_atr_mult=_env_float("STRATEGY_STOP_ATR_MULT", 1.40),
             strategy_take_atr_mult=_env_float("STRATEGY_TAKE_ATR_MULT", 3.40),
             strategy_trail_atr_mult=_env_float("STRATEGY_TRAIL_ATR_MULT", 0.95),
