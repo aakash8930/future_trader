@@ -153,6 +153,8 @@ class TradingRunner:
         self.take_profit: float | None = getattr(self.broker, '_cached_take_profit', None)
         self.take_profit_1: float | None = None  # Will be recalculated on next candle
         self._profit_lock_activated = False
+        self._initial_stop_loss: float | None = self.stop_loss
+        self._stop_was_moved: bool = False
 
         # If we have a persisted position but missing SL/TP, we need to restore other state too
         if self.broker.position and self.stop_loss is not None and self.take_profit is not None:
@@ -391,6 +393,7 @@ class TradingRunner:
                     self._profit_lock_activated = True
                     profit_lock_sl = self.last_entry_price + atr * 0.5
                     self.stop_loss = max(self.stop_loss, profit_lock_sl)
+                    self._stop_was_moved = True
                     if hasattr(self.broker, 'update_levels'):
                         self.broker.update_levels(stop_loss=self.stop_loss, take_profit=self.take_profit)
                     print(
@@ -403,6 +406,7 @@ class TradingRunner:
                     new_sl = manage_price - self.cfg.trail_atr_mult * atr
                     if new_sl > self.stop_loss:
                         self.stop_loss = new_sl
+                        self._stop_was_moved = True
                         if hasattr(self.broker, 'update_levels'):
                             self.broker.update_levels(stop_loss=self.stop_loss, take_profit=self.take_profit)
                         print(f"[{self.symbol}] TRAILING SL | {_fmt_price(self.stop_loss, self.symbol)}")
@@ -419,6 +423,7 @@ class TradingRunner:
                     self._profit_lock_activated = True
                     profit_lock_sl = self.last_entry_price - atr * 0.5
                     self.stop_loss = min(self.stop_loss, profit_lock_sl)
+                    self._stop_was_moved = True
                     if hasattr(self.broker, 'update_levels'):
                         self.broker.update_levels(stop_loss=self.stop_loss, take_profit=self.take_profit)
                     print(
@@ -431,6 +436,7 @@ class TradingRunner:
                     new_sl = manage_price + self.cfg.trail_atr_mult * atr
                     if new_sl < self.stop_loss:
                         self.stop_loss = new_sl
+                        self._stop_was_moved = True
                         if hasattr(self.broker, 'update_levels'):
                             self.broker.update_levels(stop_loss=self.stop_loss, take_profit=self.take_profit)
                         print(f"[{self.symbol}] TRAILING SL | {_fmt_price(self.stop_loss, self.symbol)}")
@@ -512,6 +518,8 @@ class TradingRunner:
         self.last_decision = dec
         self.stop_loss = dec.stop_loss
         self.take_profit = dec.take_profit
+        self._initial_stop_loss = dec.stop_loss
+        self._stop_was_moved = False
         
         # Calculate TP_1 (50% of TP distance) - must account for LONG vs SHORT
         side_label = getattr(dec.side, "value", dec.side)
@@ -633,27 +641,37 @@ class TradingRunner:
         self.risk_state.register_trade(pnl)
         self.supervisor.register_trade(pnl)
 
+        holding_time_sec = 0
+        pnl_pct = (pnl / avg_entry) if avg_entry > 0 else 0.0
+        close_label = exit_reason.upper() if exit_reason else "UNKNOWN"
+
         try:
             # Calculate holding duration
             holding_duration = (datetime.utcnow() - self.last_trade_time).total_seconds() if self.last_trade_time else 0
             holding_time_sec = int(holding_duration)
-            
-            # Calculate PnL percentage
-            pnl_pct = (pnl / avg_entry) if avg_entry > 0 else 0.0
 
             # Classify close reason more precisely
             er = exit_reason.lower() if exit_reason else ""
+            trailing_active = bool(getattr(self, "_profit_lock_activated", False))
+            stop_moved = bool(
+                getattr(self, "_stop_was_moved", False)
+                or (
+                    self._initial_stop_loss is not None
+                    and self.stop_loss is not None
+                    and abs(self.stop_loss - self._initial_stop_loss) > 1e-12
+                )
+            )
+
             if er == "take_profit":
                 close_label = "TAKE_PROFIT"
             elif er == "stop_loss":
-                # If stop was hit but pnl is positive and we had profit lock => trailing profit
-                if pnl > 0 and getattr(self, "_profit_lock_activated", False):
+                # stop-loss trigger can still be a trailing-profit capture after stop adjustments
+                if pnl > 0 and (trailing_active or stop_moved):
                     close_label = "TRAILING_PROFIT"
                 elif pnl > 0:
                     close_label = "TAKE_PROFIT"
                 else:
-                    # Negative or zero pnl
-                    close_label = "TRAILING_STOP" if getattr(self, "_profit_lock_activated", False) else "STOP_LOSS"
+                    close_label = "TRAILING_STOP" if (trailing_active or stop_moved) else "STOP_LOSS"
             elif er in {"manual", "manual_exit"}:
                 close_label = "MANUAL_EXIT"
             elif er in {"market_guard", "market_guard_exit"}:
@@ -714,7 +732,7 @@ class TradingRunner:
                 "stop_loss": self.stop_loss,
                 "take_profit": self.take_profit,
                 "exit_reason": exit_reason,
-                "close_reason": exit_reason.upper(),
+                "close_reason": close_label,
                 "holding_time_sec": holding_time_sec,
                 "add_count": add_count,
                 "status": "CLOSED",
@@ -726,12 +744,12 @@ class TradingRunner:
         # Emit live event for trade close
         self.event_logger.trade_close(
             symbol=self.symbol,
-            message=f"CLOSE {self.symbol} {exit_reason.upper()} pnl={pnl:.4f}",
+            message=f"CLOSE {self.symbol} {close_label} pnl={pnl:.4f}",
             side=self.last_entry_side,
             entry_price=self.last_entry_price,
             qty=total_qty,
             pnl=pnl,
-            exit_reason=exit_reason,
+            exit_reason=close_label,
             balance=self.risk_state.current_balance,
         )
 
@@ -758,7 +776,7 @@ class TradingRunner:
                 pnl_pct=pnl_pct,
                 balance=self.risk_state.current_balance,
                 duration_minutes=duration_minutes,
-                close_reason=exit_reason,
+                close_reason=close_label,
                 mode=self._cached_mode
             )
         except Exception as e:

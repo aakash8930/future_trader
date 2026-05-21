@@ -8,7 +8,7 @@ class MarketGuard:
     Global safety guard.
     Enforces:
     - Daily drawdown kill-switch
-    - Consecutive loss breaker
+    - Consecutive loss warning
     """
 
     def __init__(
@@ -57,12 +57,12 @@ class MarketGuard:
             return False
 
         if self.consecutive_losses >= self.max_consecutive_losses:
-            self.trading_disabled = True
             print(
-                f"[!!] MARKET GUARD: {self.consecutive_losses} consecutive losses "
-                f"→ trading stopped"
+                f"[MARKET GUARD] consecutive losses="
+                f"{self.consecutive_losses} "
+                f"(warning only, trading continues)"
             )
-            return False
+            return True
 
         return True
 

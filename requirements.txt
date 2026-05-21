@@ -17,3 +17,4 @@ python-dotenv
 uvicorn
 fastapi
 sse-starlette
+psutil

@@ -36,6 +36,7 @@ class UniverseManager:
         self.all_symbols = all_symbols
         self.timeframe = timeframe
         self.max_active = max_active
+        self.active_cap = min(5, max(3, max_active))
         self.refresh_seconds = refresh_minutes * 60
         self.last_refresh = 0.0
         self.demo_mode = demo_mode
@@ -46,7 +47,7 @@ class UniverseManager:
 
         self.selector = CoinSelector(
             timeframe=timeframe,
-            top_k=max_active * selector_top_k_multiplier,
+            top_k=max(3, max_active * selector_top_k_multiplier),
             min_atr_pct=selector_min_atr_pct,
             soft_min_volume_ratio=selector_soft_min_volume_ratio,
             rsi_long_min=selector_rsi_long_min,
@@ -75,7 +76,7 @@ class UniverseManager:
         self.last_refresh = now
 
         ranked = self.selector.select(self.all_symbols)
-        candidate_symbols = ranked[: self.max_active]
+        candidate_symbols = ranked[: self.active_cap]
 
         # If selector finds nothing valid, go flat
         if not candidate_symbols:

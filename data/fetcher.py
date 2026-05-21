@@ -47,6 +47,9 @@ class MarketDataFetcher:
     _exchange = None
     _exchange_name = None
     _supported_symbols = set()
+    _exchange_unhealthy_until_ts: float = 0.0
+    _network_failure_streak: int = 0
+    _last_cooldown_log_ts: float = 0.0
 
     def __init__(
         self,
@@ -187,28 +190,73 @@ class MarketDataFetcher:
             print("[FETTER] DEX OHLCV fetching not yet implemented.")
             return None
 
-        for attempt in range(1, retries + 1):
+        if self.exchange is None:
+            print("[FETCHER] exchange not initialized, returning empty dataset")
+            return pd.DataFrame()
+
+        now_ts = time.time()
+        if now_ts < MarketDataFetcher._exchange_unhealthy_until_ts:
+            remaining = int(MarketDataFetcher._exchange_unhealthy_until_ts - now_ts)
+            # Keep cooldown logs readable under repeated loop calls.
+            if now_ts - MarketDataFetcher._last_cooldown_log_ts >= 15:
+                print(f"[FETCHER] exchange cooling down | remaining={remaining}s")
+                MarketDataFetcher._last_cooldown_log_ts = now_ts
+            return pd.DataFrame()
+
+        max_retries = max(1, min(int(retries), 6))
+        base_delay = 2
+        max_backoff_seconds = 60
+        last_error: Exception | None = None
+
+        for attempt in range(1, max_retries + 1):
             try:
-                bars = self.exchange.fetch_ohlcv(
-                    symbol,
-                    timeframe,
-                    limit=limit,
-                )
+                ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+                if not ohlcv:
+                    return pd.DataFrame()
 
-                if not bars:
-                    raise RuntimeError("empty OHLCV")
-
+                MarketDataFetcher._network_failure_streak = 0
                 return pd.DataFrame(
-                    bars,
+                    ohlcv,
                     columns=["time", "open", "high", "low", "close", "volume"],
                 )
 
-            except (RequestTimeout, NetworkError):
-                if attempt == retries:
-                    raise
-                time.sleep(2 * attempt)
+            except (RequestTimeout, NetworkError, ExchangeNotAvailable) as e:
+                last_error = e
+                MarketDataFetcher._network_failure_streak += 1
 
-        raise RuntimeError("fetch_ohlcv failed after retries")
+                if attempt >= max_retries:
+                    break
+
+                wait_time = min(base_delay * (2 ** (attempt - 1)), max_backoff_seconds)
+                print(
+                    f"[FETCHER] network issue ({type(e).__name__}) "
+                    f"retry={attempt}/{max_retries} sleep={wait_time}s"
+                )
+                time.sleep(wait_time)
+
+            except ExchangeError as e:
+                sanitized = _sanitize_error_msg(e)
+                print(f"[FETCHER] exchange error (non-retry): {sanitized}")
+                return pd.DataFrame()
+
+            except Exception as e:
+                sanitized = _sanitize_error_msg(e)
+                print(f"[FETCHER] unexpected fetch error: {sanitized}")
+                return pd.DataFrame()
+
+        cooldown_seconds = min(300, 30 * max(1, MarketDataFetcher._network_failure_streak))
+        MarketDataFetcher._exchange_unhealthy_until_ts = time.time() + cooldown_seconds
+
+        if last_error is not None:
+            sanitized = _sanitize_error_msg(last_error)
+            print(
+                f"[FETCHER] max retries reached ({max_retries}) "
+                f"error={type(last_error).__name__}: {sanitized}"
+            )
+
+        print(f"[FETCHER] exchange cooling down for {cooldown_seconds}s")
+        MarketDataFetcher._last_cooldown_log_ts = time.time()
+        return pd.DataFrame()
 
     def fetch_last_price(
         self,
@@ -220,6 +268,10 @@ class MarketDataFetcher:
         Uses ticker last/close/bid/ask fallback.
         """
         if not self.is_symbol_supported(symbol):
+            return None
+
+        now_ts = time.time()
+        if now_ts < MarketDataFetcher._exchange_unhealthy_until_ts:
             return None
 
         # DEX implementation placeholder

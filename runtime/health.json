@@ -1,12 +1,12 @@
 {
-  "heartbeat": "2026-05-15T14:14:47.243624+00:00",
+  "heartbeat": "2026-05-21T04:03:59.067930+00:00",
   "status": "healthy",
-  "uptime_seconds": 8373.75,
-  "balance": 198.4725441614936,
+  "uptime_seconds": 94563.72,
+  "balance": 199.1446478172661,
   "exchange_connected": true,
   "websocket_connected": false,
-  "open_positions": 0,
-  "last_candle_time": "2026-05-15T13:45:00+00:00",
+  "open_positions": 2,
+  "last_candle_time": "2026-05-21T03:45:00+00:00",
   "metrics": {
     "trades_today": 0,
     "trades_long": 0,

@@ -3,6 +3,11 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    import psutil
+except Exception:  # pragma: no cover - optional runtime dependency
+    psutil = None
+
 
 class ServiceHealthReporter:
     def __init__(self, path: str = "runtime/health.json"):
@@ -19,6 +24,9 @@ class ServiceHealthReporter:
         self.last_trade_time = None
         self.session_pnl = 0.0
         self.websocket_connected = False
+        self._process = psutil.Process() if psutil is not None else None
+        self._last_memory_log_ts = 0.0
+        self._memory_log_interval_sec = 300
 
     def increment_trades(self, side: str = "LONG"):
         """Track trade counts."""
@@ -77,6 +85,22 @@ class ServiceHealthReporter:
                 "error_count": self.error_count,
             }
         }
+
+        try:
+            if self._process is None:
+                raise RuntimeError("psutil_unavailable")
+
+            memory_mb = self._process.memory_info().rss / (1024 * 1024)
+            payload["memory_mb"] = round(memory_mb, 2)
+            payload["metrics"]["memory_mb"] = round(memory_mb, 2)
+
+            now = time.time()
+            if now - self._last_memory_log_ts >= self._memory_log_interval_sec:
+                print(f"[HEALTH] memory={memory_mb:.0f}MB")
+                self._last_memory_log_ts = now
+        except Exception:
+            pass
+
         if extra:
             payload.update(extra)
 
